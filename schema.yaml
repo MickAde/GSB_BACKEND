@@ -1,0 +1,3114 @@
+openapi: 3.0.3
+info:
+  title: Genius Study Buddy API
+  version: 1.0.0
+  description: Multi-tenant AI-powered educational platform API. All school-scoped
+    endpoints require a Bearer JWT token. The JWT payload embeds `school_id` and `role`
+    which drive row-level security at the database kernel.
+  contact:
+    name: GSB Engineering
+    email: mickade35@gmail.com
+  license:
+    name: Proprietary
+paths:
+  /api/v1/admin/culture/:
+    get:
+      operationId: admin_culture_retrieve
+      description: |-
+        GET /api/v1/admin/culture/  — Return the school's culture profile.
+        PUT /api/v1/admin/culture/  — Create or fully update the culture profile (upsert).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        School is inferred from the requesting admin's JWT.
+
+        GET returns an empty-field culture object if none has been set up yet,
+        so the frontend can always render the edit form.
+      summary: Get school culture profile
+      tags:
+      - Admin — Culture
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolCulture'
+          description: ''
+    put:
+      operationId: admin_culture_update
+      description: |-
+        GET /api/v1/admin/culture/  — Return the school's culture profile.
+        PUT /api/v1/admin/culture/  — Create or fully update the culture profile (upsert).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        School is inferred from the requesting admin's JWT.
+
+        GET returns an empty-field culture object if none has been set up yet,
+        so the frontend can always render the edit form.
+      summary: Upsert school culture profile
+      tags:
+      - Admin — Culture
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchoolCultureWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SchoolCultureWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SchoolCultureWriteRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolCulture'
+          description: ''
+        '400':
+          description: Validation error
+  /api/v1/admin/daily-content/:
+    get:
+      operationId: admin_daily_content_list
+      description: |-
+        GET  /api/v1/admin/daily-content/  — List daily content for this school.
+        POST /api/v1/admin/daily-content/  — Create a new daily content entry.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        The `school` is automatically set to the requesting admin's school.
+
+        `unique_together (school, content_type, display_date)` means only one entry per
+        type per day. A duplicate POST returns 409 Conflict.
+      summary: List school daily content
+      parameters:
+      - in: query
+        name: content_type
+        schema:
+          type: string
+        description: Filter by STUDENT_QUOTE / TEACHER_TIP / ADMIN_INSIGHT
+      - in: query
+        name: display_date
+        schema:
+          type: string
+        description: Filter by date (YYYY-MM-DD)
+      tags:
+      - Admin — Daily Content
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DailyContent'
+          description: ''
+    post:
+      operationId: admin_daily_content_create
+      description: |-
+        GET  /api/v1/admin/daily-content/  — List daily content for this school.
+        POST /api/v1/admin/daily-content/  — Create a new daily content entry.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        The `school` is automatically set to the requesting admin's school.
+
+        `unique_together (school, content_type, display_date)` means only one entry per
+        type per day. A duplicate POST returns 409 Conflict.
+      summary: Create daily content entry
+      tags:
+      - Admin — Daily Content
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DailyContentWriteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DailyContentWriteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DailyContentWriteRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyContent'
+          description: ''
+        '400':
+          description: Validation error
+        '409':
+          description: Entry already exists for this type and date
+  /api/v1/admin/daily-content/{id}/:
+    patch:
+      operationId: admin_daily_content_partial_update
+      description: |-
+        PATCH  /api/v1/admin/daily-content/{id}/  — Update body or author of an entry.
+        DELETE /api/v1/admin/daily-content/{id}/  — Delete a daily content entry.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN, same school only.
+
+        > Only `body` and `author` are updatable via PATCH.
+        > `content_type` and `display_date` are identity fields — create a new entry if you need
+        > a different type or date.
+      summary: Update daily content (body / author only)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Admin — Daily Content
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedDailyContentUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedDailyContentUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedDailyContentUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyContent'
+          description: ''
+        '400':
+          description: Validation error
+        '404':
+          description: Not found
+    delete:
+      operationId: admin_daily_content_destroy
+      description: |-
+        PATCH  /api/v1/admin/daily-content/{id}/  — Update body or author of an entry.
+        DELETE /api/v1/admin/daily-content/{id}/  — Delete a daily content entry.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN, same school only.
+
+        > Only `body` and `author` are updatable via PATCH.
+        > `content_type` and `display_date` are identity fields — create a new entry if you need
+        > a different type or date.
+      summary: Delete daily content
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Admin — Daily Content
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+  /api/v1/admin/school/:
+    get:
+      operationId: admin_school_retrieve
+      description: |-
+        GET   /api/v1/admin/school/  — Return the admin's own school info.
+        PATCH /api/v1/admin/school/  — Update the school's public info (name, logo, address, contacts).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        School is inferred from the requesting admin's JWT.
+
+        > `slug` and `is_active` can only be changed by a platform owner
+        > via `PATCH /api/v1/platform/schools/{id}/`.
+      summary: Get own school info
+      tags:
+      - Admin — School
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolAdmin'
+          description: ''
+    patch:
+      operationId: admin_school_partial_update
+      description: |-
+        GET   /api/v1/admin/school/  — Return the admin's own school info.
+        PATCH /api/v1/admin/school/  — Update the school's public info (name, logo, address, contacts).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        School is inferred from the requesting admin's JWT.
+
+        > `slug` and `is_active` can only be changed by a platform owner
+        > via `PATCH /api/v1/platform/schools/{id}/`.
+      summary: Update own school info (name, logo, address, contacts)
+      tags:
+      - Admin — School
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSchoolAdminSelfUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSchoolAdminSelfUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSchoolAdminSelfUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolAdmin'
+          description: ''
+        '400':
+          description: Validation error
+  /api/v1/admin/users/:
+    get:
+      operationId: admin_users_list
+      description: |-
+        GET  /api/v1/admin/users/  — List users in the admin's school (paginated, filterable).
+        POST /api/v1/admin/users/  — Create a new user inside the school.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        The `school` is automatically set to the requesting admin's school.
+
+        **Creatable roles via POST:** STUDENT, TEACHER, SUB_ADMIN.
+        *(MAIN_ADMIN and VISITOR cannot be created via this endpoint.)*
+
+        > Only MAIN_ADMIN can create SUB_ADMIN accounts.
+
+        **GET query params:**
+        - `role` — filter by role (STUDENT, TEACHER, SUB_ADMIN, MAIN_ADMIN)
+        - `is_active` — filter by status (true / false)
+        - `search` — search first name, last name, email, or admission number
+      summary: List school users
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: string
+        description: Filter by is_active (true/false)
+      - in: query
+        name: role
+        schema:
+          type: string
+        description: Filter by role
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Search name, email, or admission number
+      tags:
+      - Admin — Users
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAdminList'
+          description: ''
+    post:
+      operationId: admin_users_create
+      description: |-
+        GET  /api/v1/admin/users/  — List users in the admin's school (paginated, filterable).
+        POST /api/v1/admin/users/  — Create a new user inside the school.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+        The `school` is automatically set to the requesting admin's school.
+
+        **Creatable roles via POST:** STUDENT, TEACHER, SUB_ADMIN.
+        *(MAIN_ADMIN and VISITOR cannot be created via this endpoint.)*
+
+        > Only MAIN_ADMIN can create SUB_ADMIN accounts.
+
+        **GET query params:**
+        - `role` — filter by role (STUDENT, TEACHER, SUB_ADMIN, MAIN_ADMIN)
+        - `is_active` — filter by status (true / false)
+        - `search` — search first name, last name, email, or admission number
+      summary: Create a user in the school
+      tags:
+      - Admin — Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminDetail'
+          description: ''
+        '400':
+          description: Validation error
+        '403':
+          description: Only MAIN_ADMIN can create SUB_ADMIN accounts
+  /api/v1/admin/users/{id}/:
+    get:
+      operationId: admin_users_retrieve
+      description: |-
+        GET    /api/v1/admin/users/{id}/  — Full user detail.
+        PATCH  /api/v1/admin/users/{id}/  — Update first_name, last_name, is_active.
+        DELETE /api/v1/admin/users/{id}/  — Soft-deactivate (sets is_active=False).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN, same school only.
+      summary: Get user detail
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Admin — Users
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminDetail'
+          description: ''
+        '404':
+          description: Not found
+    patch:
+      operationId: admin_users_partial_update
+      description: |-
+        GET    /api/v1/admin/users/{id}/  — Full user detail.
+        PATCH  /api/v1/admin/users/{id}/  — Update first_name, last_name, is_active.
+        DELETE /api/v1/admin/users/{id}/  — Soft-deactivate (sets is_active=False).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN, same school only.
+      summary: Update user (name / active status)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Admin — Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAdminUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAdminUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAdminUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAdminDetail'
+          description: ''
+        '400':
+          description: Validation error
+        '404':
+          description: Not found
+    delete:
+      operationId: admin_users_destroy
+      description: |-
+        GET    /api/v1/admin/users/{id}/  — Full user detail.
+        PATCH  /api/v1/admin/users/{id}/  — Update first_name, last_name, is_active.
+        DELETE /api/v1/admin/users/{id}/  — Soft-deactivate (sets is_active=False).
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN, same school only.
+      summary: Deactivate user (soft-delete)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Admin — Users
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: User deactivated
+        '404':
+          description: Not found
+  /api/v1/admin/users/{id}/set-password/:
+    post:
+      operationId: admin_users_set_password_create
+      description: |-
+        POST /api/v1/admin/users/{id}/set-password/
+
+        Admin sets a user's password directly — no old-password check required.
+        Useful for resetting a student's forgotten password.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN, same school only.
+        > Sub-admin cannot reset another admin's password.
+      summary: 'Admin: set user password'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Admin — Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminSetPasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AdminSetPasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AdminSetPasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Password updated
+        '400':
+          description: Validation error
+        '403':
+          description: Permission denied
+        '404':
+          description: User not found
+  /api/v1/admin/users/bulk/:
+    post:
+      operationId: admin_users_bulk_create
+      description: |-
+        POST /api/v1/admin/users/bulk/
+
+        Bulk-create multiple STUDENT accounts in a single request.
+        Returns a 207 Multi-Status response listing successes and failures so the
+        frontend can show a per-row import report.
+
+        **Permission:** MAIN_ADMIN or SUB_ADMIN.
+      summary: Bulk-create students
+      tags:
+      - Admin — Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkStudentCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/BulkStudentCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BulkStudentCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkStudentCreateResponse'
+          description: ''
+        '207':
+          description: Partial success — check `failed` list
+        '400':
+          description: Validation error
+  /api/v1/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: |-
+        POST /api/v1/auth/login/
+
+        Dual-vector authentication:
+        - **STUDENT** → identifies via `username` (admission number), no email required
+        - **TEACHER / *_ADMIN / VISITOR** → identifies via `email`
+
+        On success, returns an access token (15 min) and a refresh token (7 days).
+        Both tokens embed `role` and `school_id` in their payload.
+      summary: Login (all roles)
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              StudentLogin:
+                value:
+                  role: STUDENT
+                  identifier: ADM1029
+                  password: secret
+                  school_id: 99999999-1111-2222-3333-444444444444
+                summary: Student login
+              TeacherLogin:
+                value:
+                  role: TEACHER
+                  identifier: teacher@school.com
+                  password: secret
+                  school_id: 99999999-1111-2222-3333-444444444444
+                summary: Teacher login
+              VisitorLogin:
+                value:
+                  role: VISITOR
+                  identifier: visitor@email.com
+                  password: secret
+                summary: Visitor login
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+          description: ''
+        '401':
+          description: Invalid credentials
+        '403':
+          description: Account disabled or role mismatch
+  /api/v1/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      description: |-
+        POST /api/v1/auth/logout/
+
+        Blacklists the refresh token — the access token will naturally expire
+        within 15 minutes (its configured lifetime).
+      summary: Logout (blacklist refresh token)
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LogoutRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LogoutRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Logged out successfully
+        '400':
+          description: Missing or invalid refresh token
+  /api/v1/auth/me/:
+    get:
+      operationId: auth_me_retrieve
+      description: |-
+        GET  /api/v1/auth/me/  — Return the authenticated user's own profile.
+        PATCH /api/v1/auth/me/ — Update first_name / last_name.
+      summary: Get own profile
+      tags:
+      - Auth
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+    patch:
+      operationId: auth_me_partial_update
+      description: |-
+        GET  /api/v1/auth/me/  — Return the authenticated user's own profile.
+        PATCH /api/v1/auth/me/ — Update first_name / last_name.
+      summary: Update own profile (first/last name)
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMeRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+        '400':
+          description: Validation error
+  /api/v1/auth/password/change/:
+    post:
+      operationId: auth_password_change_create
+      description: |-
+        POST /api/v1/auth/password/change/
+
+        Authenticated user changes their own password.
+        Requires the current password for verification.
+      summary: Change own password
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Password changed
+        '400':
+          description: Validation error or wrong old password
+  /api/v1/auth/password/reset/:
+    post:
+      operationId: auth_password_reset_create
+      description: |-
+        POST /api/v1/auth/password/reset/
+
+        Request a password-reset email. Always returns 200 regardless of whether the
+        email is registered — prevents user enumeration.
+      summary: Request password reset email
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordResetRequestResponse'
+          description: ''
+  /api/v1/auth/password/reset/confirm/:
+    post:
+      operationId: auth_password_reset_confirm_create
+      description: |-
+        POST /api/v1/auth/password/reset/confirm/
+
+        Confirm a password reset using the `uid` + `token` from the reset email.
+        The token is single-use — it becomes invalid once the password is changed.
+      summary: Confirm password reset
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirmRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '204':
+          description: Password reset successfully
+        '400':
+          description: Invalid or expired reset link
+  /api/v1/auth/register/visitor/:
+    post:
+      operationId: auth_register_visitor_create
+      description: |-
+        POST /api/v1/auth/register/visitor/
+
+        Creates a Visitor account with a **1-week free trial**.
+        Sends an email verification link — the visitor must verify before logging in.
+      summary: Register as Visitor
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisitorRegistrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VisitorRegistrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VisitorRegistrationRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterVisitorResponse'
+          description: ''
+        '400':
+          description: Validation error
+  /api/v1/auth/resend-verification/:
+    post:
+      operationId: auth_resend_verification_create
+      description: |-
+        POST /api/v1/auth/resend-verification/
+
+        Re-send the email verification link for a Visitor account.
+        Always returns 200 to prevent email enumeration.
+      summary: Resend email verification
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendVerificationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResendVerificationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResendVerificationRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResendVerificationResponse'
+          description: ''
+  /api/v1/auth/token/refresh/:
+    post:
+      operationId: auth_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/v1/auth/verify-email/:
+    post:
+      operationId: auth_verify_email_create
+      description: |-
+        POST /api/v1/auth/verify-email/
+
+        Verify a Visitor's email address using the UUID token from the verification email.
+        The token is single-use and expires after 24 hours.
+      summary: Verify email address
+      tags:
+      - Auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailVerifyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EmailVerifyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EmailVerifyRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailVerifyResponse'
+          description: ''
+        '400':
+          description: Invalid or expired token
+  /api/v1/daily-content/today/:
+    get:
+      operationId: daily_content_today_retrieve
+      description: |-
+        Returns the daily content item relevant to the authenticated user's role for today.
+
+        - STUDENT / VISITOR → `STUDENT_QUOTE`
+        - TEACHER → `TEACHER_TIP`
+        - MAIN_ADMIN / SUB_ADMIN → `ADMIN_INSIGHT`
+
+        School-specific content takes priority over platform-wide content. Returns 404 if no content has been generated for today.
+      summary: Get today's daily content for the current user
+      tags:
+      - Daily Content
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyContentToday'
+          description: ''
+        '404':
+          description: No content available for today
+  /api/v1/notes/:
+    get:
+      operationId: notes_list
+      description: Returns all notes owned by the authenticated user. Supports filtering
+        and search.
+      summary: List my notes
+      parameters:
+      - in: query
+        name: note_type
+        schema:
+          type: string
+          enum:
+          - image
+          - pdf
+          - text
+          - voice
+        description: |-
+          * `pdf` - PDF
+          * `image` - Image
+          * `voice` - Voice Note
+          * `text` - Typed Text
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Order by created_at or -created_at
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Search in file_name, subject, topic
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Filter by status (PENDING_OCR, AWAITING_STUDENT_APPROVAL, PROCESSING_AI,
+          READY, FAILED)
+      - in: query
+        name: subject
+        schema:
+          type: string
+        description: Filter by subject
+      tags:
+      - Notes
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedNoteListList'
+          description: ''
+  /api/v1/notes/{id}/:
+    get:
+      operationId: notes_retrieve
+      description: Returns the complete note record including raw OCR text and AI
+        summaries.
+      summary: Get full note detail
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteDetail'
+          description: ''
+        '404':
+          description: Not found
+  /api/v1/notes/{id}/confirm-ocr/:
+    post:
+      operationId: notes_confirm_ocr_create
+      description: |-
+        POST /api/v1/notes/{pk}/confirm-ocr/
+
+        Student has reviewed the extracted OCR text, corrected any errors, and confirms it.
+        This saves the corrected text and triggers the Claude AI summarisation pipeline.
+
+        The note **must** be in `AWAITING_STUDENT_APPROVAL` state.
+      summary: Confirm OCR text and trigger AI summary
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmOCRRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ConfirmOCRRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ConfirmOCRRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmAccepted'
+          description: ''
+        '404':
+          description: Note not found
+        '409':
+          description: Note is not awaiting approval
+  /api/v1/notes/{id}/delete/:
+    delete:
+      operationId: notes_delete_destroy
+      description: DELETE /api/v1/notes/{pk}/
+      summary: Delete a note
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+  /api/v1/notes/{id}/replace/:
+    post:
+      operationId: notes_replace_create
+      description: |-
+        POST /api/v1/notes/{pk}/replace/
+
+        Replace the uploaded file on an existing note.  The old file is removed
+        from storage and all pipeline output (OCR text, AI summaries) is cleared.
+        The processing pipeline restarts from the beginning.
+
+        **Allowed roles:** STUDENT, TEACHER (owner only)
+
+        Returns 202 Accepted — poll `GET /api/v1/notes/{id}/status/` for progress.
+      summary: Replace note file and restart pipeline
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/NoteUploadRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplaceAccepted'
+          description: ''
+        '400':
+          description: Validation error
+        '404':
+          description: Note not found
+  /api/v1/notes/{id}/status/:
+    get:
+      operationId: notes_status_retrieve
+      description: Lightweight endpoint for the frontend to poll until status is READY
+        or FAILED. Cheaper than fetching the full detail every time.
+      summary: Poll note processing status
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteStatus'
+          description: ''
+        '404':
+          description: Not found
+  /api/v1/notes/{id}/update/:
+    patch:
+      operationId: notes_update_partial_update
+      description: |-
+        PATCH /api/v1/notes/{pk}/
+
+        Update subject, topic, or subtopic on an existing note.
+      summary: Update note metadata (subject/topic/subtopic)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedNoteUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedNoteUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedNoteUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NoteList'
+          description: ''
+  /api/v1/notes/conformity/:
+    get:
+      operationId: notes_conformity_list
+      description: |-
+        GET  /api/v1/notes/conformity/  — List conformity reports.
+        POST /api/v1/notes/conformity/  — Create a new conformity report.
+
+        **Allowed roles (GET):**  TEACHER (their own reports), MAIN_ADMIN / SUB_ADMIN (all school reports)
+        **Allowed roles (POST):** TEACHER only — they are the assessor.
+
+        Creating a report dispatches an async AI task.
+        Poll `GET /api/v1/notes/conformity/{id}/status/` until `status` is `DONE` or `FAILED`.
+      summary: List conformity reports
+      tags:
+      - Notes — Conformity
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConformityReport'
+          description: ''
+    post:
+      operationId: notes_conformity_create
+      description: |-
+        GET  /api/v1/notes/conformity/  — List conformity reports.
+        POST /api/v1/notes/conformity/  — Create a new conformity report.
+
+        **Allowed roles (GET):**  TEACHER (their own reports), MAIN_ADMIN / SUB_ADMIN (all school reports)
+        **Allowed roles (POST):** TEACHER only — they are the assessor.
+
+        Creating a report dispatches an async AI task.
+        Poll `GET /api/v1/notes/conformity/{id}/status/` until `status` is `DONE` or `FAILED`.
+      summary: Create a conformity report (async)
+      tags:
+      - Notes — Conformity
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConformityReportCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ConformityReportCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ConformityReportCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformityCreateAccepted'
+          description: ''
+        '403':
+          description: Only TEACHER can create conformity reports
+        '404':
+          description: Note not found or not READY
+        '409':
+          description: Note is not in READY state
+  /api/v1/notes/conformity/{id}/:
+    get:
+      operationId: notes_conformity_retrieve
+      description: |-
+        GET /api/v1/notes/conformity/{pk}/
+
+        Full conformity report — conformity percentage, similarity analysis, and current status.
+
+        **Allowed roles:** TEACHER (reports they created), MAIN_ADMIN, SUB_ADMIN
+      summary: Get conformity report detail
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes — Conformity
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformityReport'
+          description: ''
+        '404':
+          description: Not found
+  /api/v1/notes/conformity/{id}/status/:
+    get:
+      operationId: notes_conformity_status_retrieve
+      description: |-
+        GET /api/v1/notes/conformity/{pk}/status/
+
+        Poll the AI generation status of a conformity report.
+        Returns status plus `conformity_percentage` when DONE.
+
+        **Allowed roles:** TEACHER (reports they created), MAIN_ADMIN, SUB_ADMIN
+      summary: Poll conformity report status
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Notes — Conformity
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConformityReportStatus'
+          description: ''
+        '404':
+          description: Not found
+  /api/v1/notes/school/:
+    get:
+      operationId: notes_school_list
+      description: |-
+        GET /api/v1/notes/school/
+
+        Paginated list of all notes in the school.  Needed by teachers before
+        creating a conformity report — they can browse student notes, filter by
+        owner or subject, and pick the note they want to assess.
+
+        **Allowed roles:** TEACHER, MAIN_ADMIN, SUB_ADMIN
+      summary: Browse all school notes (teacher / admin)
+      parameters:
+      - in: query
+        name: note_type
+        schema:
+          type: string
+        description: Filter by note type (pdf / image / voice / text)
+      - in: query
+        name: owner
+        schema:
+          type: string
+        description: Filter by owner UUID
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Search file_name, subject, topic
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Filter by pipeline status
+      - in: query
+        name: subject
+        schema:
+          type: string
+        description: Filter by subject (case-insensitive contains)
+      tags:
+      - Notes
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchoolNoteList'
+          description: ''
+  /api/v1/notes/upload/:
+    post:
+      operationId: notes_upload_create
+      description: |-
+        POST /api/v1/notes/upload/
+
+        Uploads a single note file (PDF, image, voice, or typed text).
+        File is stored in Supabase Storage and the OCR pipeline is triggered asynchronously.
+
+        **Allowed roles:** STUDENT, TEACHER
+        *(Visitors are not permitted — they have no school association.)*
+
+        Returns 202 Accepted — poll `GET /api/v1/notes/{id}/status/` for progress.
+
+        **Status flow:**
+        `PENDING_OCR` → `AWAITING_STUDENT_APPROVAL` → `PROCESSING_AI` → `READY`
+
+        > Typed text notes (`note_type=text`) skip OCR and go straight to
+        > `AWAITING_STUDENT_APPROVAL`.
+      summary: Upload a single note
+      tags:
+      - Notes
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/NoteUploadRequestRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAccepted'
+          description: ''
+        '400':
+          description: Validation error (file too large, wrong type)
+  /api/v1/notes/upload/bulk/:
+    post:
+      operationId: notes_upload_bulk_create
+      description: |-
+        POST /api/v1/notes/upload/bulk/
+
+        Upload multiple files in a single request. Each file is processed independently.
+        Returns a 207 Multi-Status response with a summary of successes and failures.
+
+        **Allowed roles:** STUDENT, TEACHER
+        *(Visitors are not permitted — they have no school association.)*
+      summary: Upload multiple notes at once
+      tags:
+      - Notes
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/BulkUploadFormRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '207':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkUploadResponse'
+          description: ''
+        '400':
+          description: No files provided
+  /api/v1/platform/schools/:
+    get:
+      operationId: platform_schools_list
+      description: |-
+        GET  /api/v1/platform/schools/  — List all schools (active + inactive).
+        POST /api/v1/platform/schools/  — Create (onboard) a new school tenant.
+
+        **Permission:** Platform owner only (`is_staff=True`).
+      summary: List all schools
+      tags:
+      - Platform — Schools
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchoolAdmin'
+          description: ''
+    post:
+      operationId: platform_schools_create
+      description: |-
+        GET  /api/v1/platform/schools/  — List all schools (active + inactive).
+        POST /api/v1/platform/schools/  — Create (onboard) a new school tenant.
+
+        **Permission:** Platform owner only (`is_staff=True`).
+      summary: Onboard a new school
+      tags:
+      - Platform — Schools
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchoolCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SchoolCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SchoolCreateRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolAdmin'
+          description: ''
+        '400':
+          description: Validation error
+  /api/v1/platform/schools/{id}/:
+    get:
+      operationId: platform_schools_retrieve
+      description: |-
+        GET    /api/v1/platform/schools/{id}/  — Full school detail.
+        PATCH  /api/v1/platform/schools/{id}/  — Update any school field.
+        DELETE /api/v1/platform/schools/{id}/  — Soft-deactivate (sets is_active=False).
+
+        **Permission:** Platform owner only (`is_staff=True`).
+
+        > DELETE is a soft-delete: it sets `is_active=False` which triggers the
+        > PostgreSQL RLS policy to deny all data access for that tenant.
+        > Hard deletion is intentionally not supported here — use the database directly.
+      summary: Get school detail
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Platform — Schools
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolAdmin'
+          description: ''
+        '404':
+          description: Not found
+    patch:
+      operationId: platform_schools_partial_update
+      description: |-
+        GET    /api/v1/platform/schools/{id}/  — Full school detail.
+        PATCH  /api/v1/platform/schools/{id}/  — Update any school field.
+        DELETE /api/v1/platform/schools/{id}/  — Soft-deactivate (sets is_active=False).
+
+        **Permission:** Platform owner only (`is_staff=True`).
+
+        > DELETE is a soft-delete: it sets `is_active=False` which triggers the
+        > PostgreSQL RLS policy to deny all data access for that tenant.
+        > Hard deletion is intentionally not supported here — use the database directly.
+      summary: Update school
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Platform — Schools
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSchoolUpdateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSchoolUpdateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSchoolUpdateRequest'
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolAdmin'
+          description: ''
+        '400':
+          description: Validation error
+        '404':
+          description: Not found
+    delete:
+      operationId: platform_schools_destroy
+      description: |-
+        GET    /api/v1/platform/schools/{id}/  — Full school detail.
+        PATCH  /api/v1/platform/schools/{id}/  — Update any school field.
+        DELETE /api/v1/platform/schools/{id}/  — Soft-deactivate (sets is_active=False).
+
+        **Permission:** Platform owner only (`is_staff=True`).
+
+        > DELETE is a soft-delete: it sets `is_active=False` which triggers the
+        > PostgreSQL RLS policy to deny all data access for that tenant.
+        > Hard deletion is intentionally not supported here — use the database directly.
+      summary: Deactivate school (soft-delete)
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Platform — Schools
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '204':
+          description: School deactivated
+        '404':
+          description: Not found
+  /api/v1/schools/{id}/:
+    get:
+      operationId: schools_retrieve
+      description: 'Public endpoint — no authentication required. Returns publicly
+        safe school info: name, address, contact details.'
+      summary: Get school public detail
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Schools
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolDetail'
+          description: ''
+        '404':
+          description: School not found or inactive
+  /api/v1/schools/{id}/culture/:
+    get:
+      operationId: schools_culture_retrieve
+      description: Returns the school's philosophy, mission, vision, and values. Used
+        to personalise AI-generated content. **Authentication required — must be a
+        member of this school.**
+      summary: Get school culture profile
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - Schools
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchoolCulture'
+          description: ''
+        '404':
+          description: School not found or no culture configured
+  /api/v1/schools/active/:
+    get:
+      operationId: schools_active_list
+      description: Public endpoint — no authentication required. Returns all schools
+        currently onboarded and active on the platform. Used to populate the School
+        Selection Page before login.
+      summary: List active schools
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Schools
+      security:
+      - jwtAuth: []
+      - BearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SchoolPublic'
+              examples:
+                ExampleResponse:
+                  value:
+                  - - id: 99999999-1111-2222-3333-444444444444
+                      name: Prestige Academy
+                      slug: prestige-academy
+                      logo_url: https://...
+                  summary: Example response
+          description: ''
+components:
+  schemas:
+    AdminSetPasswordRequest:
+      type: object
+      description: Admin sets a user's password directly (no old-password required).
+      properties:
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        confirm_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - confirm_password
+      - new_password
+    BulkStudentCreateRequest:
+      type: object
+      description: Bulk-create students inside the admin's school.
+      properties:
+        students:
+          type: array
+          items:
+            $ref: '#/components/schemas/BulkStudentItemRequest'
+      required:
+      - students
+    BulkStudentCreateResponse:
+      type: object
+      properties:
+        created:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserAdminList'
+        failed:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+      required:
+      - created
+      - failed
+    BulkStudentItemRequest:
+      type: object
+      properties:
+        first_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        last_name:
+          type: string
+          minLength: 1
+          default: ''
+          maxLength: 150
+        username:
+          type: string
+          minLength: 1
+          description: Admission number / student ID.
+          maxLength: 150
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+      required:
+      - first_name
+      - password
+      - username
+    BulkUploadFormRequest:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            type: string
+            format: binary
+        note_type:
+          $ref: '#/components/schemas/NoteTypeEnum'
+        subject:
+          type: string
+          minLength: 1
+        topic:
+          type: string
+          minLength: 1
+        subtopic:
+          type: string
+          minLength: 1
+      required:
+      - files
+      - note_type
+    BulkUploadResponse:
+      type: object
+      description: Response shape for multi-file upload.
+      properties:
+        uploaded:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoteList'
+        failed:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: List of {filename, error} for files that failed.
+      required:
+      - failed
+      - uploaded
+    ChangePasswordRequest:
+      type: object
+      properties:
+        old_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        confirm_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - confirm_password
+      - new_password
+      - old_password
+    ConfirmAccepted:
+      type: object
+      properties:
+        note_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+        status:
+          type: string
+      required:
+      - note_id
+      - status
+      - task_id
+    ConfirmOCRRequest:
+      type: object
+      description: |-
+        Student-reviewed and corrected OCR text.
+        Only after this confirmation does AI summarisation begin.
+      properties:
+        confirmed_text:
+          type: string
+          minLength: 1
+          description: Student-corrected OCR text. Triggers AI summarisation pipeline.
+      required:
+      - confirmed_text
+    ConformityCreateAccepted:
+      type: object
+      properties:
+        report_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+        status:
+          type: string
+      required:
+      - report_id
+      - status
+      - task_id
+    ConformityReport:
+      type: object
+      description: Full conformity report — used for list and detail views.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        student_note_id:
+          type: string
+          format: uuid
+          readOnly: true
+        student_name:
+          type: string
+          readOnly: true
+        teacher_note_id:
+          type: string
+          format: uuid
+          readOnly: true
+        subject:
+          type: string
+          readOnly: true
+        conformity_percentage:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          readOnly: true
+        similarity_analysis:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ConformityStatusEnum'
+          readOnly: true
+        generated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - conformity_percentage
+      - generated_at
+      - id
+      - similarity_analysis
+      - status
+      - student_name
+      - student_note_id
+      - subject
+      - teacher_note_id
+    ConformityReportCreateRequest:
+      type: object
+      description: Create a conformity report — teacher selects student note + their
+        own reference note.
+      properties:
+        student_note_id:
+          type: string
+          format: uuid
+          description: UUID of the student's READY note to evaluate.
+        teacher_note_id:
+          type: string
+          format: uuid
+          description: UUID of the teacher's own READY reference note.
+      required:
+      - student_note_id
+      - teacher_note_id
+    ConformityReportStatus:
+      type: object
+      description: Lightweight status polling for async conformity report generation.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/ConformityStatusEnum'
+          readOnly: true
+        conformity_percentage:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          readOnly: true
+        generated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - conformity_percentage
+      - generated_at
+      - id
+      - status
+    ConformityStatusEnum:
+      enum:
+      - PENDING
+      - PROCESSING
+      - DONE
+      - FAILED
+      type: string
+      description: |-
+        * `PENDING` - Pending
+        * `PROCESSING` - Processing
+        * `DONE` - Done
+        * `FAILED` - Failed
+    ContentTypeEnum:
+      enum:
+      - STUDENT_QUOTE
+      - TEACHER_TIP
+      - ADMIN_INSIGHT
+      type: string
+      description: |-
+        * `STUDENT_QUOTE` - Student Quote
+        * `TEACHER_TIP` - Teacher Tip
+        * `ADMIN_INSIGHT` - Admin Insight
+    CreatableUserRoleEnum:
+      enum:
+      - STUDENT
+      - TEACHER
+      - SUB_ADMIN
+      type: string
+      description: |-
+        * `STUDENT` - Student
+        * `TEACHER` - Teacher
+        * `SUB_ADMIN` - Sub Admin
+    DailyContent:
+      type: object
+      description: Full daily content record — used by admin CRUD endpoints.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        school:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        content_type:
+          $ref: '#/components/schemas/ContentTypeEnum'
+        body:
+          type: string
+        author:
+          type: string
+          maxLength: 255
+        display_date:
+          type: string
+          format: date
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - body
+      - content_type
+      - created_at
+      - display_date
+      - id
+      - school
+    DailyContentToday:
+      type: object
+      description: Lightweight response for the /daily-content/today/ endpoint.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        content_type:
+          $ref: '#/components/schemas/ContentTypeEnum'
+        body:
+          type: string
+        author:
+          type: string
+          maxLength: 255
+        display_date:
+          type: string
+          format: date
+      required:
+      - body
+      - content_type
+      - display_date
+      - id
+    DailyContentWriteRequest:
+      type: object
+      description: Create daily content — school is injected by the view.
+      properties:
+        content_type:
+          $ref: '#/components/schemas/ContentTypeEnum'
+        body:
+          type: string
+          minLength: 1
+        author:
+          type: string
+          maxLength: 255
+        display_date:
+          type: string
+          format: date
+      required:
+      - body
+      - content_type
+      - display_date
+    EmailVerifyRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          format: uuid
+      required:
+      - token
+    EmailVerifyResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+        access:
+          type: string
+        refresh:
+          type: string
+      required:
+      - access
+      - detail
+      - refresh
+    LoginRequest:
+      type: object
+      properties:
+        role:
+          $ref: '#/components/schemas/UserRoleEnum'
+        identifier:
+          type: string
+          minLength: 1
+          description: Email for TEACHER/ADMIN/VISITOR. Admission number for STUDENT.
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        school_id:
+          type: string
+          format: uuid
+          nullable: true
+      required:
+      - identifier
+      - password
+      - role
+    LogoutRequestRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+      required:
+      - refresh
+    Me:
+      type: object
+      description: Own profile — readable + updatable fields for GET /auth/me/ and
+        PATCH /auth/me/.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          nullable: true
+        username:
+          type: string
+          readOnly: true
+          nullable: true
+          description: Admission number / student ID. Used only for STUDENT role.
+        role:
+          allOf:
+          - $ref: '#/components/schemas/UserRoleEnum'
+          readOnly: true
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        full_name:
+          type: string
+          readOnly: true
+        school:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        school_name:
+          type: string
+          readOnly: true
+        is_email_verified:
+          type: boolean
+          readOnly: true
+        trial_expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        is_visitor_trial_active:
+          type: boolean
+          readOnly: true
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - date_joined
+      - email
+      - full_name
+      - id
+      - is_email_verified
+      - is_visitor_trial_active
+      - role
+      - school
+      - school_name
+      - trial_expires_at
+      - username
+    NoteDetail:
+      type: object
+      description: Full note detail including AI output — shown after READY status.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        owner_name:
+          type: string
+          readOnly: true
+        file_url:
+          type: string
+          readOnly: true
+          description: S3/R2 URI
+        file_name:
+          type: string
+          readOnly: true
+        note_type:
+          allOf:
+          - $ref: '#/components/schemas/NoteTypeEnum'
+          readOnly: true
+        file_size_bytes:
+          type: integer
+          readOnly: true
+        subject:
+          type: string
+          readOnly: true
+        topic:
+          type: string
+          readOnly: true
+        subtopic:
+          type: string
+          readOnly: true
+        raw_ocr_text:
+          type: string
+          readOnly: true
+        ai_summary_paragraph:
+          type: string
+          readOnly: true
+        ai_bullet_points:
+          type: array
+          items:
+            type: string
+          readOnly: true
+          description: Bullet-point summary generated by the AI provider.
+        ai_key_points:
+          type: array
+          items:
+            type: string
+          readOnly: true
+          description: Key learning points extracted by the AI provider.
+        status:
+          allOf:
+          - $ref: '#/components/schemas/NoteStatusEnum'
+          readOnly: true
+        error_message:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - ai_bullet_points
+      - ai_key_points
+      - ai_summary_paragraph
+      - created_at
+      - error_message
+      - file_name
+      - file_size_bytes
+      - file_url
+      - id
+      - note_type
+      - owner_name
+      - raw_ocr_text
+      - status
+      - subject
+      - subtopic
+      - topic
+      - updated_at
+    NoteList:
+      type: object
+      description: Compact card view for the notes list page.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        file_name:
+          type: string
+          readOnly: true
+        note_type:
+          allOf:
+          - $ref: '#/components/schemas/NoteTypeEnum'
+          readOnly: true
+        subject:
+          type: string
+          readOnly: true
+        topic:
+          type: string
+          readOnly: true
+        subtopic:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/NoteStatusEnum'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - file_name
+      - id
+      - note_type
+      - status
+      - subject
+      - subtopic
+      - topic
+    NoteStatus:
+      type: object
+      description: Lightweight status-only response — used for polling.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/NoteStatusEnum'
+          readOnly: true
+        error_message:
+          type: string
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - error_message
+      - id
+      - status
+      - updated_at
+    NoteStatusEnum:
+      enum:
+      - PENDING_OCR
+      - AWAITING_STUDENT_APPROVAL
+      - PROCESSING_AI
+      - READY
+      - FAILED
+      type: string
+      description: |-
+        * `PENDING_OCR` - Pending OCR
+        * `AWAITING_STUDENT_APPROVAL` - Awaiting Student Approval
+        * `PROCESSING_AI` - Processing AI
+        * `READY` - Ready
+        * `FAILED` - Failed
+    NoteTypeEnum:
+      enum:
+      - pdf
+      - image
+      - voice
+      - text
+      type: string
+      description: |-
+        * `pdf` - PDF
+        * `image` - Image
+        * `voice` - Voice Note
+        * `text` - Typed Text
+    NoteUploadRequestRequest:
+      type: object
+      description: Validates a single-file upload (multipart/form-data).
+      properties:
+        file:
+          type: string
+          format: binary
+        note_type:
+          $ref: '#/components/schemas/NoteTypeEnum'
+        subject:
+          type: string
+          default: ''
+          maxLength: 100
+        topic:
+          type: string
+          default: ''
+          maxLength: 100
+        subtopic:
+          type: string
+          default: ''
+          maxLength: 100
+      required:
+      - file
+      - note_type
+    PaginatedNoteListList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/NoteList'
+    PasswordResetConfirmRequest:
+      type: object
+      properties:
+        uid:
+          type: string
+          minLength: 1
+        token:
+          type: string
+          minLength: 1
+        new_password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        confirm_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - confirm_password
+      - new_password
+      - token
+      - uid
+    PasswordResetRequestRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+      required:
+      - email
+    PasswordResetRequestResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    PatchedDailyContentUpdateRequest:
+      type: object
+      description: PATCH daily content — only body/author are mutable (content_type/display_date
+        are identity fields).
+      properties:
+        body:
+          type: string
+          minLength: 1
+        author:
+          type: string
+          maxLength: 255
+    PatchedMeRequest:
+      type: object
+      description: Own profile — readable + updatable fields for GET /auth/me/ and
+        PATCH /auth/me/.
+      properties:
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+    PatchedNoteUpdateRequest:
+      type: object
+      description: Allows updating subject/topic/subtopic after upload.
+      properties:
+        subject:
+          type: string
+          maxLength: 100
+        topic:
+          type: string
+          maxLength: 100
+        subtopic:
+          type: string
+          maxLength: 100
+    PatchedSchoolAdminSelfUpdateRequest:
+      type: object
+      description: School admin updates their own school's public info — slug and
+        is_active are platform-owner only.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        logo_url:
+          type: string
+          format: uri
+          maxLength: 200
+        address:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          maxLength: 254
+        contact_phone:
+          type: string
+          maxLength: 20
+    PatchedSchoolUpdateRequest:
+      type: object
+      description: Platform owner updates school fields (all optional — PATCH semantics).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: ^[-a-zA-Z0-9_]+$
+        logo_url:
+          type: string
+          format: uri
+          maxLength: 200
+        address:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          maxLength: 254
+        contact_phone:
+          type: string
+          maxLength: 20
+        is_active:
+          type: boolean
+    PatchedUserAdminUpdateRequest:
+      type: object
+      description: Allowed fields an admin can update on a user.
+      properties:
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        is_active:
+          type: boolean
+    RegisterVisitorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    ReplaceAccepted:
+      type: object
+      properties:
+        note_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+        status:
+          type: string
+      required:
+      - note_id
+      - status
+      - task_id
+    ResendVerificationRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+      required:
+      - email
+    ResendVerificationResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    SchoolAdmin:
+      type: object
+      description: Full school detail for platform owner and school admins.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        slug:
+          type: string
+          maxLength: 255
+          pattern: ^[-a-zA-Z0-9_]+$
+        logo_url:
+          type: string
+          format: uri
+          maxLength: 200
+        address:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          maxLength: 254
+        contact_phone:
+          type: string
+          maxLength: 20
+        is_active:
+          type: boolean
+        onboarding_date:
+          type: string
+          format: date-time
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - name
+      - onboarding_date
+      - slug
+      - updated_at
+    SchoolCreateRequest:
+      type: object
+      description: Platform owner creates a new school (tenant).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: ^[-a-zA-Z0-9_]+$
+        logo_url:
+          type: string
+          format: uri
+          maxLength: 200
+        address:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          maxLength: 254
+        contact_phone:
+          type: string
+          maxLength: 20
+      required:
+      - name
+      - slug
+    SchoolCulture:
+      type: object
+      description: Read-only culture view — served to authenticated school members.
+      properties:
+        philosophy:
+          type: string
+        mission_statement:
+          type: string
+        vision_statement:
+          type: string
+        core_values:
+          type: string
+        school_creed:
+          type: string
+        institutional_principles:
+          type: string
+        founder_quotes: {}
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - updated_at
+    SchoolCultureWriteRequest:
+      type: object
+      description: Write serializer for school admin to upsert their culture profile.
+      properties:
+        founder_quotes:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          description: 'Array of {quote: "...", author: "..."} objects.'
+        philosophy:
+          type: string
+        mission_statement:
+          type: string
+        vision_statement:
+          type: string
+        core_values:
+          type: string
+        school_creed:
+          type: string
+        institutional_principles:
+          type: string
+    SchoolDetail:
+      type: object
+      description: Public detail view — safe fields only, no is_active or internal
+        timestamps.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        slug:
+          type: string
+          maxLength: 255
+          pattern: ^[-a-zA-Z0-9_]+$
+        logo_url:
+          type: string
+          format: uri
+          maxLength: 200
+        address:
+          type: string
+        contact_email:
+          type: string
+          format: email
+          maxLength: 254
+        contact_phone:
+          type: string
+          maxLength: 20
+      required:
+      - id
+      - name
+      - slug
+    SchoolNoteList:
+      type: object
+      description: Note list for teachers/admins browsing all notes in their school.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        owner_id:
+          type: string
+          format: uuid
+          readOnly: true
+        owner_name:
+          type: string
+          readOnly: true
+        file_name:
+          type: string
+          readOnly: true
+        note_type:
+          allOf:
+          - $ref: '#/components/schemas/NoteTypeEnum'
+          readOnly: true
+        subject:
+          type: string
+          readOnly: true
+        topic:
+          type: string
+          readOnly: true
+        subtopic:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/NoteStatusEnum'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - file_name
+      - id
+      - note_type
+      - owner_id
+      - owner_name
+      - status
+      - subject
+      - subtopic
+      - topic
+    SchoolPublic:
+      type: object
+      description: Minimal school data for the public school selection page.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        slug:
+          type: string
+          maxLength: 255
+          pattern: ^[-a-zA-Z0-9_]+$
+        logo_url:
+          type: string
+          format: uri
+          maxLength: 200
+      required:
+      - id
+      - name
+      - slug
+    TokenPair:
+      type: object
+      properties:
+        access:
+          type: string
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          minLength: 1
+      required:
+      - refresh
+    UploadAccepted:
+      type: object
+      properties:
+        note_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+        status:
+          type: string
+      required:
+      - note_id
+      - status
+      - task_id
+    UserAdminDetail:
+      type: object
+      description: Full user detail for the admin user detail / edit page.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/UserRoleEnum'
+          readOnly: true
+        first_name:
+          type: string
+          readOnly: true
+        last_name:
+          type: string
+          readOnly: true
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          nullable: true
+        username:
+          type: string
+          readOnly: true
+          nullable: true
+          description: Admission number / student ID. Used only for STUDENT role.
+        school:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        school_name:
+          type: string
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+        is_email_verified:
+          type: boolean
+          readOnly: true
+        trial_expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - date_joined
+      - email
+      - first_name
+      - full_name
+      - id
+      - is_active
+      - is_email_verified
+      - last_name
+      - role
+      - school
+      - school_name
+      - trial_expires_at
+      - username
+    UserAdminList:
+      type: object
+      description: Compact user card for the admin users list page.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/UserRoleEnum'
+          readOnly: true
+        first_name:
+          type: string
+          readOnly: true
+        last_name:
+          type: string
+          readOnly: true
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          nullable: true
+        username:
+          type: string
+          readOnly: true
+          nullable: true
+          description: Admission number / student ID. Used only for STUDENT role.
+        is_active:
+          type: boolean
+          readOnly: true
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - date_joined
+      - email
+      - first_name
+      - full_name
+      - id
+      - is_active
+      - last_name
+      - role
+      - username
+    UserCreateRequest:
+      type: object
+      description: School admin creates a new user inside their school.
+      properties:
+        role:
+          $ref: '#/components/schemas/CreatableUserRoleEnum'
+        first_name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        last_name:
+          type: string
+          minLength: 1
+          default: ''
+          maxLength: 150
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        email:
+          type: string
+          format: email
+          nullable: true
+          minLength: 1
+        username:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 150
+      required:
+      - first_name
+      - password
+      - role
+    UserRoleEnum:
+      enum:
+      - STUDENT
+      - TEACHER
+      - SUB_ADMIN
+      - MAIN_ADMIN
+      - VISITOR
+      type: string
+      description: |-
+        * `STUDENT` - Student
+        * `TEACHER` - Teacher
+        * `SUB_ADMIN` - Sub Admin
+        * `MAIN_ADMIN` - Main Admin
+        * `VISITOR` - Visitor
+    VisitorRegistrationRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+      required:
+      - email
+      - password
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtained from POST /api/v1/auth/login/. The payload embeds
+        `role` and `school_id` which drive row-level security at the database kernel.
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+servers:
+- url: http://localhost:8000
+  description: Local development
+- url: https://api.geniusstudybuddy.com
+  description: Production

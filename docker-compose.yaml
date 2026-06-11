@@ -1,0 +1,107 @@
+services:
+
+  # ── Message broker ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: gsb_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Django API server ─────────────────────────────────────────
+  web:
+    build: .
+    container_name: gsb_web_server
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery: OCR worker ────────────────────────────────────────
+  # CPU-bound (Tesseract). Low concurrency to avoid CPU thrashing.
+  celery_ocr:
+    build: .
+    container_name: gsb_celery_ocr
+    command: celery -A GSB_Project worker -Q celery_ocr --concurrency=2 -l info -n ocr@%h
+    volumes:
+      - .:/app
+    env_file:
+      - .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery: AI worker ─────────────────────────────────────────
+  # I/O-bound (Claude / GPT HTTP calls). Higher concurrency is fine.
+  celery_ai:
+    build: .
+    container_name: gsb_celery_ai
+    command: celery -A GSB_Project worker -Q celery_ai --concurrency=4 -l info -n ai@%h
+    volumes:
+      - .:/app
+    env_file:
+      - .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery: Default worker ────────────────────────────────────
+  # Handles lightweight tasks: email dispatch, DB cleanups, etc.
+  celery_default:
+    build: .
+    container_name: gsb_celery_default
+    command: celery -A GSB_Project worker -Q celery_default --concurrency=2 -l info -n default@%h
+    volumes:
+      - .:/app
+    env_file:
+      - .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery: Math worker ───────────────────────────────────────
+  # CPU-bound (SymPy). Sandboxed from other queues to prevent
+  # infinite-loop equations from blocking OCR or AI tasks.
+  celery_math:
+    build: .
+    container_name: gsb_celery_math
+    command: celery -A GSB_Project worker -Q celery_math --concurrency=2 -l info -n math@%h
+    volumes:
+      - .:/app
+    env_file:
+      - .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Celery Beat: Periodic task scheduler ─────────────────────
+  # Reads schedule from the database (django_celery_beat tables).
+  # Only ONE instance of this should ever run — never scale it.
+  celery_beat:
+    build: .
+    container_name: gsb_celery_beat
+    command: celery -A GSB_Project beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - .:/app
+    env_file:
+      - .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped

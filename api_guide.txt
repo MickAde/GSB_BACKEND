@@ -1,0 +1,728 @@
+================================================================================
+GENIUS STUDY BUDDY (GSB) — FRONTEND API INTEGRATION GUIDE
+For Frontend Developers
+================================================================================
+Base URL (development):   http://localhost:8000/api/v1
+Base URL (production):    https://api.yourdomain.com/api/v1
+Interactive docs (Swagger): http://localhost:8000/api/v1/docs/
+================================================================================
+
+TABLE OF CONTENTS
+─────────────────
+ 1. How Authentication Works
+ 2. The Login Flow (Step-by-Step)
+ 3. Attaching the Token to Every Request
+ 4. Token Refresh
+ 5. Logout
+ 6. Error Response Format
+ 7. All API Endpoints
+
+
+================================================================================
+1. HOW AUTHENTICATION WORKS
+================================================================================
+
+This API uses JWT (JSON Web Tokens). Here is what you need to know:
+
+  • Login returns TWO tokens:
+      - access  → short-lived (15 minutes), sent with every API request
+      - refresh → long-lived (7 days), used ONLY to get a new access token
+
+  • Store the tokens:
+      - access  → sessionStorage  (auto-clears when browser tab closes)
+      - refresh → localStorage    (persists for 7 days across sessions)
+
+  • EVERY protected API request must include this header:
+      Authorization: Bearer <access_token>
+
+  • If you forget the header or send an expired token, the API returns 401.
+    The 401 response from /auth/me/ and all other protected routes means:
+      "No Authorization header found" OR "Token is invalid/expired"
+    It does NOT mean wrong username/password (that is also 401 on /auth/login/
+    but is a different scenario).
+
+  • The JWT payload (decoded client-side) contains:
+      {
+        "user_id":   "uuid",
+        "role":      "STUDENT | TEACHER | SUB_ADMIN | MAIN_ADMIN | VISITOR",
+        "school_id": "uuid | null",
+        "is_staff":  false,
+        "exp":       1234567890,
+        "iat":       1234567890
+      }
+    Use jwt-decode (npm) to read this without verifying — verification is the
+    server's job.
+
+
+================================================================================
+2. THE LOGIN FLOW (STEP-BY-STEP)
+================================================================================
+
+STEP 1 — POST to /auth/login/
+─────────────────────────────
+Request body (JSON):
+
+  For STUDENT (uses admission number, not email):
+    {
+      "role":       "STUDENT",
+      "identifier": "1211.22.12",
+      "password":   "their_password",
+      "school_id":  "4761d25c-703b-4215-a109-ffa1830f52ce"
+    }
+
+  For TEACHER:
+    {
+      "role":       "TEACHER",
+      "identifier": "teacher@school.com",
+      "password":   "their_password",
+      "school_id":  "4761d25c-703b-4215-a109-ffa1830f52ce"
+    }
+
+  For MAIN_ADMIN or SUB_ADMIN:
+    {
+      "role":       "MAIN_ADMIN",
+      "identifier": "admin@school.com",
+      "password":   "their_password",
+      "school_id":  "4761d25c-703b-4215-a109-ffa1830f52ce"
+    }
+
+  For VISITOR (no school_id):
+    {
+      "role":       "VISITOR",
+      "identifier": "visitor@gmail.com",
+      "password":   "their_password"
+    }
+
+Success response (200):
+    {
+      "access":  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "refresh": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    }
+
+STEP 2 — Store the tokens
+──────────────────────────
+  sessionStorage.setItem('gsb_access',  data.access);
+  localStorage.setItem('gsb_refresh',   data.refresh);
+
+STEP 3 — Decode the access token to get the user's role and school
+───────────────────────────────────────────────────────────────────
+  import { jwtDecode } from 'jwt-decode';
+  const payload = jwtDecode(data.access);
+  // payload.role, payload.school_id, payload.user_id, payload.is_staff
+
+STEP 4 — Redirect based on role
+─────────────────────────────────
+  STUDENT    → /student/dashboard
+  TEACHER    → /teacher/dashboard
+  MAIN_ADMIN → /admin/dashboard
+  SUB_ADMIN  → /admin/dashboard
+  VISITOR    → /visitor/dashboard
+  is_staff   → /platform/dashboard  (platform owner only, rare)
+
+
+================================================================================
+3. ATTACHING THE TOKEN TO EVERY REQUEST
+================================================================================
+
+THIS IS THE MOST IMPORTANT PART. Every request to a protected endpoint must
+include the Authorization header. If you miss it, you will get 401.
+
+─────────────────────────────────────────────────────
+OPTION A — Axios (recommended, used in this project)
+─────────────────────────────────────────────────────
+
+Set up a single Axios instance with an interceptor that automatically reads
+the token from sessionStorage and attaches it:
+
+  // src/lib/api/client.ts
+  import axios from 'axios';
+
+  const apiClient = axios.create({
+    baseURL: 'http://localhost:8000/api/v1',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  // This interceptor runs before EVERY request
+  apiClient.interceptors.request.use((config) => {
+    const token = sessionStorage.getItem('gsb_access');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  });
+
+  export default apiClient;
+
+Then use apiClient for ALL API calls — never use plain axios.fetch() directly:
+
+  // CORRECT
+  const res = await apiClient.get('/auth/me/');
+
+  // WRONG — no interceptor, no token attached
+  const res = await axios.get('http://localhost:8000/api/v1/auth/me/');
+
+─────────────────────────────────────────────
+OPTION B — Fetch API (if not using Axios)
+─────────────────────────────────────────────
+
+  const token = sessionStorage.getItem('gsb_access');
+
+  const res = await fetch('http://localhost:8000/api/v1/auth/me/', {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+──────────────────────────────────────────────────────────
+OPTION C — Swagger UI (for manual testing at /api/v1/docs/)
+──────────────────────────────────────────────────────────
+
+  1. POST /auth/login/ via the Swagger UI form
+  2. Copy the "access" value from the response
+  3. Click the green "Authorize" button at the top of the page
+  4. In the "BearerAuth" field type:  Bearer eyJhbGci...
+     (include the word "Bearer" followed by a space, then the token)
+  5. Click Authorize → Close
+  6. All subsequent Swagger requests will now include the header
+
+
+================================================================================
+4. TOKEN REFRESH
+================================================================================
+
+The access token expires after 15 minutes. When it expires, you will get 401
+on any API call. Do NOT make the user log in again — silently refresh instead.
+
+HOW TO DETECT EXPIRY
+─────────────────────
+  Option A (proactive): Decode the access token and check the `exp` field.
+    const { exp } = jwtDecode(token);
+    const isExpired = Date.now() >= exp * 1000;
+
+  Option B (reactive): Watch for 401 responses in your Axios interceptor and
+    attempt a refresh before retrying.
+
+HOW TO REFRESH
+───────────────
+  POST /api/v1/auth/token/refresh/
+  Body: { "refresh": "<refresh_token_from_localStorage>" }
+
+  Success (200): { "access": "<new_access_token>" }
+    → sessionStorage.setItem('gsb_access', data.access);
+    → Retry the original failed request with the new token.
+
+  Failure (401): The refresh token is expired or blacklisted.
+    → Clear both tokens from storage.
+    → Redirect the user to the login page.
+
+AXIOS INTERCEPTOR PATTERN (handles this automatically)
+───────────────────────────────────────────────────────
+
+  apiClient.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      const original = error.config;
+      if (error.response?.status === 401 && !original._retry) {
+        original._retry = true;
+        const refresh = localStorage.getItem('gsb_refresh');
+        if (!refresh) {
+          // No refresh token → send to login
+          window.location.href = '/';
+          return Promise.reject(error);
+        }
+        try {
+          const { data } = await axios.post(
+            'http://localhost:8000/api/v1/auth/token/refresh/',
+            { refresh }
+          );
+          sessionStorage.setItem('gsb_access', data.access);
+          original.headers.Authorization = `Bearer ${data.access}`;
+          return apiClient(original); // retry original request
+        } catch {
+          sessionStorage.removeItem('gsb_access');
+          localStorage.removeItem('gsb_refresh');
+          window.location.href = '/?session=expired';
+          return Promise.reject(error);
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
+
+
+================================================================================
+5. LOGOUT
+================================================================================
+
+  POST /api/v1/auth/logout/
+  Header: Authorization: Bearer <access_token>
+  Body: { "refresh": "<refresh_token_from_localStorage>" }
+
+  Success (204): No body.
+
+  After calling logout:
+    sessionStorage.removeItem('gsb_access');
+    localStorage.removeItem('gsb_refresh');
+    redirect to '/';
+
+
+================================================================================
+6. ERROR RESPONSE FORMAT
+================================================================================
+
+ALL errors from this API follow RFC 7807 format:
+
+  {
+    "error_code":  "UNAUTHORIZED",
+    "detail":      "Authentication credentials were not provided.",
+    "status_code": 401,
+    "timestamp":   "2026-06-09T22:38:30.997123+00:00"
+  }
+
+Common error codes:
+  UNAUTHORIZED         — no token or expired token
+  INVALID_CREDENTIALS  — wrong username/password on login
+  ACCOUNT_DISABLED     — user account is deactivated
+  ROLE_MISMATCH        — role param doesn't match stored role
+  EMAIL_NOT_VERIFIED   — visitor hasn't verified email
+  FORBIDDEN            — authenticated but lacks permission
+  NOT_FOUND            — resource doesn't exist
+  DUPLICATE_ENTRY      — unique constraint violation (e.g. same daily content twice)
+  INVALID_STATE        — action not valid for current status (e.g. confirm-ocr on non-pending note)
+  RATE_LIMIT_EXCEEDED  — too many requests (login: 5/min, AI: 10/min, others: 100/min)
+
+Validation errors (400) use field-keyed format:
+  {
+    "email":    ["Enter a valid email address."],
+    "password": ["This field may not be blank."]
+  }
+
+Pagination responses:
+  {
+    "count":       150,
+    "next":        "http://localhost:8000/api/v1/notes/?page=2",
+    "previous":    null,
+    "total_pages": 8,
+    "results":     [ ... ]
+  }
+
+
+================================================================================
+7. ALL API ENDPOINTS
+================================================================================
+
+Legend:
+  [PUBLIC]  — no token required
+  [AUTH]    — any authenticated user
+  [STUDENT] — role: STUDENT
+  [TEACHER] — role: TEACHER
+  [ADMIN]   — role: MAIN_ADMIN or SUB_ADMIN
+  [MAIN]    — role: MAIN_ADMIN only
+  [PLATFORM]— is_staff: true (platform owner)
+
+──────────────────────────────────────────────────────────────────────────────
+AUTH ENDPOINTS
+──────────────────────────────────────────────────────────────────────────────
+
+POST /auth/login/                          [PUBLIC]
+  Body: { role, identifier, password, school_id? }
+  Returns: { access, refresh }
+
+POST /auth/token/refresh/                  [PUBLIC]
+  Body: { refresh }
+  Returns: { access }
+
+POST /auth/register/visitor/               [PUBLIC]
+  Body: { email, first_name, last_name, password }
+  Returns: { detail: "Account created..." }
+
+POST /auth/verify-email/                   [PUBLIC]
+  Body: { token }   ← UUID from verification email link
+  Returns: { detail, access, refresh }
+
+POST /auth/resend-verification/            [PUBLIC]
+  Body: { email }
+  Returns: { detail }
+
+POST /auth/logout/                         [AUTH]
+  Body: { refresh }
+  Returns: 204 No Content
+
+GET  /auth/me/                             [AUTH]
+  Returns: {
+    id, email, username, role,
+    first_name, last_name, full_name,
+    avatar_url,          ← null if no profile picture set
+    school, school_name,
+    is_email_verified, trial_expires_at, date_joined
+  }
+
+PATCH /auth/me/                            [AUTH]
+  Body: { first_name?, last_name? }
+  Returns: same shape as GET /auth/me/
+
+POST /auth/me/avatar/                      [AUTH]
+  Content-Type: multipart/form-data
+  Field: avatar  ← the image file (JPEG, PNG, WebP, or GIF, max 5 MB)
+  Returns 200: { "avatar_url": "https://..." }
+  Errors:
+    400 MISSING_FILE       — no "avatar" field in form data
+    400 INVALID_FILE_TYPE  — file is not JPEG/PNG/WebP/GIF
+    400 FILE_TOO_LARGE     — file exceeds 5 MB
+  Note: Uploading a new avatar automatically replaces the old one.
+        The avatar_url is also returned in GET /auth/me/.
+
+  Axios example:
+    const form = new FormData();
+    form.append('avatar', file);              // file = <input type="file"> result
+    const res = await apiClient.post('/auth/me/avatar/', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    // res.data.avatar_url → store or set in state
+
+DELETE /auth/me/avatar/                    [AUTH]
+  Returns 204: No Content
+  Error 400 NO_AVATAR — user has no profile picture to remove
+
+POST /auth/password/change/               [AUTH]
+  Body: { old_password, new_password, confirm_password }
+  Returns: 204 No Content
+
+POST /auth/password/reset/                [PUBLIC]
+  Body: { email }
+  Returns: { detail }  ← always 200, never reveals if email exists
+
+POST /auth/password/reset/confirm/        [PUBLIC]
+  Body: { uid, token, new_password, confirm_password }
+  ← uid and token come from the reset email link query params
+  Returns: 204 No Content
+
+──────────────────────────────────────────────────────────────────────────────
+SCHOOLS — PUBLIC
+──────────────────────────────────────────────────────────────────────────────
+
+GET /schools/active/                       [PUBLIC]
+  Query: page, page_size
+  Returns: paginated list of { id, name, slug, logo_url }
+  Use: populate the school selection grid on the login screen
+
+GET /schools/{id}/                         [PUBLIC]
+  Returns: { id, name, slug, logo_url, address, contact_email, contact_phone }
+
+GET /schools/{id}/culture/                 [AUTH]
+  Returns: {
+    motto, mission_statement, vision_statement,
+    core_values, school_creed,
+    founder_quotes: [{ quote, author }],
+    updated_at
+  }
+  Note: school_id in token must match {id}
+
+──────────────────────────────────────────────────────────────────────────────
+DAILY CONTENT
+──────────────────────────────────────────────────────────────────────────────
+
+GET /daily-content/today/                  [AUTH]
+  Returns: { id, content_type, body, author, display_date }
+        OR: null  ← if no content is set for today (handle gracefully, no error)
+  Note: content_type is determined by the user's role:
+    STUDENT/VISITOR  → STUDENT_QUOTE
+    TEACHER          → TEACHER_TIP
+    ADMIN            → ADMIN_INSIGHT
+
+──────────────────────────────────────────────────────────────────────────────
+ADMIN — SCHOOL MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+
+GET   /admin/school/                       [ADMIN]
+  Returns full school object for the admin's own school
+
+PATCH /admin/school/                       [ADMIN]
+  Body: { name?, logo_url?, address?, contact_email?, contact_phone? }
+  Note: slug and is_active are read-only here — platform owner only
+
+GET /admin/culture/                        [ADMIN]
+  Returns: { motto, mission_statement, vision_statement, core_values,
+             school_creed, founder_quotes, updated_at }
+  Note: returns empty strings if not yet configured — always safe to render
+
+PUT /admin/culture/                        [ADMIN]
+  !! Use PUT not PATCH — always send ALL fields !!
+  Body: { motto, mission_statement, vision_statement,
+          core_values, school_creed,
+          founder_quotes: [{ quote, author }] }
+  Returns: updated culture object
+
+──────────────────────────────────────────────────────────────────────────────
+ADMIN — DAILY CONTENT MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+
+GET /admin/daily-content/                  [ADMIN]
+  Query: content_type?, display_date? (YYYY-MM-DD)
+  Returns: array (not paginated) of DailyContent objects
+
+POST /admin/daily-content/                 [ADMIN]
+  Body: { content_type, body, author, display_date }
+  content_type values: "STUDENT_QUOTE" | "TEACHER_TIP" | "ADMIN_INSIGHT"
+  Returns: 201 DailyContent
+  Error 409: entry already exists for this type + date
+
+PATCH /admin/daily-content/{id}/           [ADMIN]
+  !! Only body and author are editable. content_type and display_date are fixed !!
+  Body: { body?, author? }
+  Returns: updated DailyContent
+
+DELETE /admin/daily-content/{id}/          [ADMIN]
+  Returns: 204 No Content
+
+──────────────────────────────────────────────────────────────────────────────
+ADMIN — USER MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+
+GET /admin/users/                          [ADMIN]
+  Query: role?, is_active?, search?, page?
+  Returns: paginated list of users in the admin's school
+
+POST /admin/users/                         [ADMIN]
+  Body: {
+    role:       "STUDENT" | "TEACHER" | "SUB_ADMIN"
+    first_name, last_name, password,
+    email?      ← required for TEACHER and SUB_ADMIN
+    username?   ← required for STUDENT (admission number)
+  }
+  Note: only MAIN_ADMIN can create SUB_ADMIN accounts
+  Returns: 201 user detail object
+
+POST /admin/users/bulk/                    [ADMIN]
+  Body: { students: [{ first_name, last_name, username, password }] }
+  Returns 201 (all success) or 207 (partial):
+    { created: [...], failed: [{ username, error }] }
+
+GET /admin/users/{id}/                     [ADMIN]
+  Returns: full user detail
+
+PATCH /admin/users/{id}/                   [ADMIN]
+  Body: { first_name?, last_name?, is_active? }
+  Note: SUB_ADMIN cannot edit MAIN_ADMIN or other SUB_ADMIN accounts
+  Returns: updated user detail
+
+DELETE /admin/users/{id}/                  [ADMIN]
+  Soft-deletes (sets is_active=false)
+  Note: MAIN_ADMIN cannot be deactivated via this endpoint
+  Returns: 204 No Content
+
+POST /admin/users/{id}/set-password/       [ADMIN]
+  Body: { new_password, confirm_password }
+  Note: SUB_ADMIN cannot reset MAIN_ADMIN or SUB_ADMIN passwords
+  Returns: 204 No Content
+
+──────────────────────────────────────────────────────────────────────────────
+PLATFORM OWNER — SCHOOL MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+Requires is_staff: true in the JWT payload.
+
+GET /platform/schools/                     [PLATFORM]
+  Returns: array of all schools
+
+POST /platform/schools/                    [PLATFORM]
+  Body: { name, slug, logo_url?, address?, contact_email?, contact_phone? }
+  Returns: 201 school object
+
+GET /platform/schools/{id}/               [PLATFORM]
+  Returns: full school object
+
+PATCH /platform/schools/{id}/             [PLATFORM]
+  Body: { name?, slug?, logo_url?, address?, contact_email?, contact_phone?, is_active? }
+  Note: is_active=false locks out the entire school tenant
+  Returns: updated school object
+
+DELETE /platform/schools/{id}/            [PLATFORM]
+  Soft-deletes school (sets is_active=false)
+  Returns: 204 No Content
+
+──────────────────────────────────────────────────────────────────────────────
+NOTES — UPLOAD & MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+Allowed to upload: STUDENT, TEACHER (NOT VISITOR — no school)
+Max file size: 20 MB per file
+
+Note Status flow:
+  PENDING_OCR → AWAITING_STUDENT_APPROVAL → PROCESSING_AI → READY | FAILED
+
+Note Types:
+  pdf   → application/pdf
+  image → image/jpeg, image/png, image/webp
+  voice → audio/mpeg, audio/wav, audio/ogg
+  text  → text/plain
+
+POST /notes/upload/                        [STUDENT, TEACHER]
+  Content-Type: multipart/form-data
+  Fields: file, note_type, subject?, topic?, subtopic?
+  Returns 202: { note_id, task_id, status }
+  → Poll /notes/{note_id}/status/ after this
+
+POST /notes/upload/bulk/                   [STUDENT, TEACHER]
+  Content-Type: multipart/form-data
+  Fields: files[] (multiple), note_type, subject?, topic?, subtopic?
+  Returns 202 or 207: { uploaded: [...], failed: [...] }
+
+GET /notes/                                [AUTH]
+  Returns own notes only (paginated)
+  Query: status?, note_type?, subject?, search?, ordering?, page?
+
+GET /notes/school/                         [TEACHER, ADMIN]
+  Returns ALL notes in the school (paginated)
+  Query: owner?, subject?, status?, note_type?, search?, page?
+
+GET /notes/{id}/                           [Owner only]
+  Returns full note detail including AI output:
+  { id, owner_name, file_url, file_name, note_type, file_size_bytes,
+    subject, topic, subtopic,
+    raw_ocr_text, ai_summary_paragraph, ai_bullet_points, ai_key_points,
+    status, error_message, created_at, updated_at }
+
+GET /notes/{id}/status/                    [Owner only]
+  Lightweight status poll — use this for polling, NOT /notes/{id}/
+  Returns: { id, status, error_message, updated_at }
+  Poll every 3 seconds. Stop when status is:
+    READY | FAILED | AWAITING_STUDENT_APPROVAL
+
+POST /notes/{id}/confirm-ocr/             [Owner only]
+  Triggers AI summarisation after student reviews OCR text
+  Note must be in AWAITING_STUDENT_APPROVAL state
+  Body: { confirmed_text }  ← minimum 10 characters
+  Returns 202: { note_id, task_id, status: "PROCESSING_AI" }
+  → Resume polling /notes/{id}/status/ after this
+
+POST /notes/{id}/replace/                  [Owner only]
+  Replace the file and restart the entire pipeline
+  Content-Type: multipart/form-data
+  Fields: same as single upload
+  Returns 202: { note_id, task_id, status }
+
+PATCH /notes/{id}/update/                  [Owner only]
+  Body: { subject?, topic?, subtopic? }
+  Returns: updated note list item
+
+DELETE /notes/{id}/delete/                 [Owner only]
+  Hard deletes the note AND removes file from storage
+  Returns: 204 No Content
+
+──────────────────────────────────────────────────────────────────────────────
+CONFORMITY REPORTS
+──────────────────────────────────────────────────────────────────────────────
+Create: TEACHER only
+View:   TEACHER (own reports), MAIN_ADMIN, SUB_ADMIN
+
+Conformity Status flow:
+  PENDING → PROCESSING → DONE | FAILED
+
+GET /notes/conformity/                     [TEACHER, ADMIN]
+  Returns: paginated list of conformity reports
+  TEACHER sees only their own reports; ADMIN sees all school reports
+
+POST /notes/conformity/                    [TEACHER only]
+  Body: { student_note_id, teacher_note_id }
+  BOTH notes must have status = READY
+  student_note_id must be a note within the school
+  teacher_note_id must be a note owned by the requesting teacher
+  Returns 202: { report_id, task_id, status: "PENDING" }
+  → Poll /notes/conformity/{report_id}/status/ after this
+
+GET /notes/conformity/{id}/               [TEACHER (own), ADMIN]
+  Returns full report: {
+    id, student_note_id, student_name,
+    teacher_note_id, subject,
+    conformity_percentage, similarity_analysis,
+    status, generated_at
+  }
+
+GET /notes/conformity/{id}/status/        [TEACHER (own), ADMIN]
+  Lightweight status poll
+  Returns: { id, status, conformity_percentage, generated_at }
+  Poll every 4 seconds. Stop when status is: DONE | FAILED
+
+
+================================================================================
+QUICK REFERENCE — WHAT EACH ROLE CAN ACCESS
+================================================================================
+
+STUDENT:
+  POST /auth/login/           POST /auth/logout/
+  GET  /auth/me/              PATCH /auth/me/
+  POST /auth/me/avatar/       DELETE /auth/me/avatar/
+  POST /auth/password/change/
+  GET  /daily-content/today/
+  GET  /schools/{id}/culture/
+  POST /notes/upload/         POST /notes/upload/bulk/
+  GET  /notes/                GET  /notes/{id}/
+  GET  /notes/{id}/status/    POST /notes/{id}/confirm-ocr/
+  PATCH /notes/{id}/update/   DELETE /notes/{id}/delete/
+  POST /notes/{id}/replace/
+
+TEACHER:
+  Everything STUDENT can access, plus:
+  GET  /notes/school/
+  GET  /notes/conformity/
+  POST /notes/conformity/
+  GET  /notes/conformity/{id}/
+  GET  /notes/conformity/{id}/status/
+
+MAIN_ADMIN and SUB_ADMIN:
+  Everything TEACHER can view, plus:
+  GET  /admin/school/         PATCH /admin/school/
+  GET  /admin/culture/        PUT   /admin/culture/
+  GET  /admin/daily-content/  POST  /admin/daily-content/
+  PATCH /admin/daily-content/{id}/
+  DELETE /admin/daily-content/{id}/
+  GET  /admin/users/          POST  /admin/users/
+  POST /admin/users/bulk/
+  GET  /admin/users/{id}/     PATCH /admin/users/{id}/
+  DELETE /admin/users/{id}/   POST  /admin/users/{id}/set-password/
+  Note: SUB_ADMIN cannot touch MAIN_ADMIN or other SUB_ADMIN accounts
+
+VISITOR:
+  POST /auth/register/visitor/  POST /auth/verify-email/
+  POST /auth/resend-verification/
+  POST /auth/login/             POST /auth/logout/
+  GET  /auth/me/                PATCH /auth/me/
+  GET  /daily-content/today/
+  Note: Visitors have NO school — they cannot access notes/school/, admin/,
+        or any school-scoped endpoint. Notes they upload have no school_id.
+
+PLATFORM OWNER (is_staff=true):
+  Uses the Django admin panel at http://localhost:8000/admin/ for most tasks
+  GET  /platform/schools/      POST  /platform/schools/
+  GET  /platform/schools/{id}/ PATCH /platform/schools/{id}/
+  DELETE /platform/schools/{id}/
+
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+Before going live, verify these scenarios work end-to-end:
+
+  [ ] Student login with admission number → receives JWT with role=STUDENT
+  [ ] Teacher login with email → receives JWT with role=TEACHER
+  [ ] Admin login with email → receives JWT with role=MAIN_ADMIN
+  [ ] Visitor registration → verification email sent → verify → JWT returned
+  [ ] POST /auth/me/avatar/ with JPEG file → 200 with avatar_url
+  [ ] GET /auth/me/ returns updated avatar_url after upload
+  [ ] DELETE /auth/me/avatar/ → 204, GET /auth/me/ returns avatar_url=null
+  [ ] GET /auth/me/ with valid token → 200 with user profile
+  [ ] GET /auth/me/ with NO token → 401
+  [ ] GET /auth/me/ with EXPIRED token → 401 → refresh → retry → 200
+  [ ] POST /auth/token/refresh/ with valid refresh → new access token
+  [ ] POST /auth/token/refresh/ with expired refresh → 401 → redirect to login
+  [ ] POST /notes/upload/ → poll /notes/{id}/status/ until AWAITING_STUDENT_APPROVAL
+  [ ] POST /notes/{id}/confirm-ocr/ → poll until READY → GET /notes/{id}/ for summary
+  [ ] POST /notes/conformity/ → poll /conformity/{id}/status/ until DONE
+  [ ] MAIN_ADMIN create SUB_ADMIN → succeeds
+  [ ] SUB_ADMIN create SUB_ADMIN → 403 FORBIDDEN
+  [ ] SUB_ADMIN edit MAIN_ADMIN  → 403 FORBIDDEN
+
+================================================================================
+END OF DOCUMENT
+================================================================================

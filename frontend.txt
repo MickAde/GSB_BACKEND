@@ -1,0 +1,3008 @@
+================================================================================
+GENIUS STUDY BUDDY (GSB) — FRONTEND SPECIFICATION
+Phase 1 & Phase 2 Implementation Guide
+For Senior Frontend & UI/UX Engineers
+================================================================================
+Prepared by: Backend Engineering Team
+API Version: v1.0
+Backend: Django 5.2 REST API (running at http://localhost:8000)
+Date: June 2026
+Classification: Internal Engineering Reference
+================================================================================
+
+TABLE OF CONTENTS
+─────────────────
+ 1. Project Context & Architecture Overview
+ 2. Tech Stack & Exact Dependencies
+ 3. Environment Configuration
+ 4. Project Folder Structure
+ 5. Complete API Contract (Phase 1 & Phase 2)
+ 6. TypeScript Type System
+ 7. API Client Setup (Axios + Interceptors + Token Refresh)
+ 8. Authentication Architecture & Token Strategy
+ 9. State Management (Zustand Stores)
+10. TanStack Query — Configuration & Key Patterns
+11. Next.js App Router — Route Map & Protection
+12. Design System (Tokens, Typography, Components)
+13. Phase 1 — Screen-by-Screen Breakdown
+14. Phase 2 — Screen-by-Screen Breakdown
+15. Critical UX Patterns
+16. Error Handling Strategy
+17. Responsive Design & Accessibility
+18. Testing Strategy
+
+
+================================================================================
+1. PROJECT CONTEXT & ARCHITECTURE OVERVIEW
+================================================================================
+
+Genius Study Buddy (GSB) is a cloud-based, AI-powered educational SaaS platform
+for Nigerian secondary schools. It is multi-tenant: each school is a completely
+isolated tenant. One school's data MUST NEVER be accessible to another school.
+
+PLATFORM ENTRY POINTS
+──────────────────────
+There are exactly TWO entry paths — this must drive the entire navigation
+architecture:
+
+  Path A — VISITOR:
+    Landing → Visitor Registration → Email Verification → Visitor Dashboard
+
+  Path B — SCHOOL USER:
+    Landing → School Selection → Role Selection → Login → Role Dashboard
+
+FIVE USER ROLES
+───────────────
+  STUDENT    — authenticates via admission number (username), no email required
+  TEACHER    — authenticates via email
+  MAIN_ADMIN — authenticates via email, highest school authority
+  SUB_ADMIN  — authenticates via email, limited admin
+  VISITOR    — authenticates via email, 1-week trial, no school affiliation
+
+TENANT ISOLATION MECHANISM
+───────────────────────────
+The backend embeds school_id and role inside the JWT payload. TenantMiddleware
+reads school_id from the JWT and executes:
+
+  SET LOCAL app.current_school_id = '<uuid>';
+
+This runs a PostgreSQL Row-Level Security (RLS) policy at the DB kernel level.
+The frontend must:
+  1. Never send requests to another school's resources
+  2. Always pass the Authorization: Bearer <access_token> header
+  3. Decode the JWT to read role and school_id for client-side routing decisions
+
+ASYNC PIPELINE (critical for Phase 2 UX)
+──────────────────────────────────────────
+Note processing is entirely asynchronous via Celery workers. The frontend polls
+lightweight status endpoints until the pipeline completes. Three pipelines exist:
+
+  OCR Pipeline:    PENDING_OCR → AWAITING_STUDENT_APPROVAL → (student confirms) → PROCESSING_AI → READY | FAILED
+  AI Pipeline:     PROCESSING_AI → READY | FAILED
+  Conformity:      PENDING → PROCESSING → DONE | FAILED
+
+Polling MUST stop when status reaches a terminal state (READY, DONE, FAILED or
+AWAITING_STUDENT_APPROVAL which requires user action).
+
+
+================================================================================
+2. TECH STACK & EXACT DEPENDENCIES
+================================================================================
+
+CORE FRAMEWORK
+  next                    15.x (App Router — NOT Pages Router)
+  react                   19.x
+  react-dom               19.x
+  typescript              5.x
+
+HTTP & SERVER STATE
+  @tanstack/react-query   5.x    (server state, caching, polling)
+  axios                   1.x    (HTTP client with interceptors)
+
+CLIENT STATE
+  zustand                 5.x    (auth tokens, user profile, school context)
+
+FORMS & VALIDATION
+  react-hook-form         7.x
+  zod                     3.x
+  @hookform/resolvers     3.x    (bridge between zod and react-hook-form)
+
+STYLING & COMPONENTS
+  tailwindcss             3.x
+  @shadcn/ui              (component collection — install individually)
+  class-variance-authority (cva — required by shadcn)
+  clsx                    (conditional classnames)
+  tailwind-merge          (merge conflicting Tailwind classes)
+  lucide-react            (icon set — used by shadcn)
+
+FILE UPLOAD
+  react-dropzone          14.x
+
+CHARTS & DATA VIZ (Phase 2 analytics preview)
+  recharts                2.x
+
+DATES
+  date-fns                3.x
+
+JWT DECODING (client-side, no verification — just reading payload)
+  jwt-decode              4.x
+
+TYPE GENERATION (run once after backend schema changes)
+  openapi-typescript      7.x    (dev dependency)
+
+TESTING
+  vitest                  (unit tests)
+  @testing-library/react  (component tests)
+  msw                     2.x    (mock service worker — API mocking in tests)
+
+LINTING & FORMATTING
+  eslint
+  prettier
+  @typescript-eslint/eslint-plugin
+
+package.json scripts (minimum):
+  "dev":        "next dev"
+  "build":      "next build"
+  "start":      "next start"
+  "type-check": "tsc --noEmit"
+  "lint":       "next lint"
+  "gen:types":  "openapi-typescript http://localhost:8000/api/schema/ -o src/types/api.ts"
+  "test":       "vitest"
+
+
+================================================================================
+3. ENVIRONMENT CONFIGURATION
+================================================================================
+
+Create .env.local (never commit this):
+
+  NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+  NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+Create .env.production:
+
+  NEXT_PUBLIC_API_BASE_URL=https://api.yourdomain.com
+  NEXT_PUBLIC_APP_URL=https://yourdomain.com
+
+IMPORTANT: Only variables prefixed NEXT_PUBLIC_ are exposed to the browser.
+The API base URL is public because the frontend calls it from the browser.
+Never put secret keys in NEXT_PUBLIC_ variables.
+
+Access in code:
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
+
+
+================================================================================
+4. PROJECT FOLDER STRUCTURE
+================================================================================
+
+src/
+├── app/                              # Next.js App Router
+│   ├── (public)/                     # Route group — no auth required
+│   │   ├── page.tsx                  # Landing page
+│   │   ├── schools/
+│   │   │   └── page.tsx              # School selection
+│   │   ├── login/
+│   │   │   └── page.tsx              # Login (receives role + school_id from URL)
+│   │   ├── register/
+│   │   │   └── page.tsx              # Visitor registration
+│   │   ├── verify-email/
+│   │   │   └── page.tsx              # Email verification (token from URL query)
+│   │   ├── reset-password/
+│   │   │   └── page.tsx              # Password reset confirm (uid + token from URL)
+│   │   └── forgot-password/
+│   │       └── page.tsx              # Password reset request
+│   │
+│   ├── (student)/                    # Route group — role: STUDENT
+│   │   ├── layout.tsx                # Student shell layout + sidebar
+│   │   ├── dashboard/page.tsx
+│   │   ├── notes/
+│   │   │   ├── page.tsx              # Note list
+│   │   │   ├── upload/page.tsx       # Upload note
+│   │   │   └── [id]/
+│   │   │       ├── page.tsx          # Note detail (AI summary)
+│   │   │       ├── review/page.tsx   # OCR review & confirmation
+│   │   │       └── status/page.tsx   # Processing status (polling)
+│   │   └── profile/page.tsx
+│   │
+│   ├── (teacher)/                    # Route group — role: TEACHER
+│   │   ├── layout.tsx
+│   │   ├── dashboard/page.tsx
+│   │   ├── notes/
+│   │   │   ├── page.tsx              # Own notes
+│   │   │   ├── upload/page.tsx
+│   │   │   ├── school/page.tsx       # Browse all school notes
+│   │   │   └── [id]/page.tsx
+│   │   └── conformity/
+│   │       ├── page.tsx              # Conformity reports list
+│   │       ├── new/page.tsx          # Create conformity report
+│   │       └── [id]/page.tsx         # Report detail
+│   │
+│   ├── (admin)/                      # Route group — roles: MAIN_ADMIN, SUB_ADMIN
+│   │   ├── layout.tsx
+│   │   ├── dashboard/page.tsx
+│   │   ├── school/page.tsx           # School info editor
+│   │   ├── culture/page.tsx          # School culture editor
+│   │   ├── daily-content/
+│   │   │   ├── page.tsx              # Daily content list
+│   │   │   └── [id]/page.tsx
+│   │   └── users/
+│   │       ├── page.tsx              # User management
+│   │       ├── new/page.tsx
+│   │       ├── import/page.tsx       # Bulk student import
+│   │       └── [id]/page.tsx
+│   │
+│   ├── (platform)/                   # Route group — is_staff (platform owner)
+│   │   ├── layout.tsx
+│   │   ├── dashboard/page.tsx
+│   │   └── schools/
+│   │       ├── page.tsx
+│   │       ├── new/page.tsx
+│   │       └── [id]/page.tsx
+│   │
+│   ├── (visitor)/                    # Route group — role: VISITOR
+│   │   ├── layout.tsx
+│   │   ├── dashboard/page.tsx
+│   │   └── notes/
+│   │       ├── page.tsx
+│   │       ├── upload/page.tsx
+│   │       └── [id]/page.tsx
+│   │
+│   ├── api/                          # Next.js Route Handlers (BFF layer if needed)
+│   │   └── auth/callback/route.ts    # Optional: handle email verification redirect
+│   │
+│   ├── layout.tsx                    # Root layout (QueryClientProvider, etc.)
+│   └── not-found.tsx
+│
+├── components/
+│   ├── ui/                           # shadcn/ui primitives (auto-generated)
+│   │   ├── button.tsx
+│   │   ├── input.tsx
+│   │   ├── card.tsx
+│   │   ├── badge.tsx
+│   │   ├── dialog.tsx
+│   │   ├── table.tsx
+│   │   ├── tabs.tsx
+│   │   ├── textarea.tsx
+│   │   ├── select.tsx
+│   │   ├── toast.tsx / sonner.tsx
+│   │   └── ... (all shadcn primitives)
+│   │
+│   ├── layout/
+│   │   ├── RootProviders.tsx         # QueryClient + Toaster + AuthGate
+│   │   ├── StudentSidebar.tsx
+│   │   ├── TeacherSidebar.tsx
+│   │   ├── AdminSidebar.tsx
+│   │   ├── PlatformSidebar.tsx
+│   │   ├── TopBar.tsx                # Header with daily content + user menu
+│   │   └── RoleGuard.tsx             # Client-side role check wrapper
+│   │
+│   ├── auth/
+│   │   ├── LoginForm.tsx
+│   │   ├── VisitorRegisterForm.tsx
+│   │   ├── ForgotPasswordForm.tsx
+│   │   ├── ResetPasswordForm.tsx
+│   │   └── ChangePasswordForm.tsx
+│   │
+│   ├── schools/
+│   │   ├── SchoolCard.tsx
+│   │   ├── SchoolGrid.tsx
+│   │   └── SchoolSearch.tsx
+│   │
+│   ├── notes/
+│   │   ├── NoteUploadDropzone.tsx
+│   │   ├── NoteCard.tsx
+│   │   ├── NoteStatusBadge.tsx
+│   │   ├── NoteStatusPoller.tsx      # Encapsulates the polling logic
+│   │   ├── OCRReviewEditor.tsx       # The critical OCR text editor
+│   │   ├── AISummaryCard.tsx
+│   │   └── BulkUploadTable.tsx
+│   │
+│   ├── conformity/
+│   │   ├── ConformityReportCard.tsx
+│   │   ├── ConformityScoreRing.tsx   # Visual percentage display
+│   │   └── ConformityStatusPoller.tsx
+│   │
+│   ├── admin/
+│   │   ├── UserTable.tsx
+│   │   ├── UserFormDialog.tsx
+│   │   ├── BulkImportTable.tsx
+│   │   ├── DailyContentTable.tsx
+│   │   └── CultureEditor.tsx
+│   │
+│   └── common/
+│       ├── PageHeader.tsx
+│       ├── EmptyState.tsx
+│       ├── ErrorState.tsx
+│       ├── LoadingSpinner.tsx
+│       ├── ConfirmDialog.tsx
+│       ├── PaginationControls.tsx
+│       └── DailyContentBanner.tsx
+│
+├── hooks/
+│   ├── useAuth.ts                    # Read auth state from Zustand
+│   ├── useCurrentUser.ts             # TanStack Query: GET /auth/me/
+│   ├── useSchools.ts                 # TanStack Query: GET /schools/active/
+│   ├── useNotes.ts                   # TanStack Query: notes queries
+│   ├── useNotePoller.ts              # Polling hook for note status
+│   ├── useConformityPoller.ts        # Polling hook for conformity status
+│   └── useDailyContent.ts
+│
+├── lib/
+│   ├── api/
+│   │   ├── client.ts                 # Axios instance with interceptors
+│   │   ├── auth.ts                   # Auth API functions
+│   │   ├── schools.ts                # Schools API functions
+│   │   ├── notes.ts                  # Notes API functions
+│   │   ├── admin.ts                  # Admin API functions
+│   │   └── platform.ts              # Platform API functions
+│   │
+│   ├── query-keys.ts                 # Centralised TanStack Query key factory
+│   ├── token.ts                      # Token read/write/decode helpers
+│   └── utils.ts                      # cn(), formatDate(), formatFileSize()
+│
+├── stores/
+│   ├── authStore.ts                  # Zustand: tokens + decoded user
+│   └── schoolStore.ts                # Zustand: selected school (pre-login)
+│
+├── types/
+│   ├── api.ts                        # Auto-generated from openapi-typescript
+│   └── index.ts                      # Hand-written domain types & enums
+│
+└── middleware.ts                     # Next.js middleware for route protection
+
+
+================================================================================
+5. COMPLETE API CONTRACT — PHASE 1 & PHASE 2
+================================================================================
+
+BASE URL:  process.env.NEXT_PUBLIC_API_BASE_URL + "/api/v1"
+Example:   http://localhost:8000/api/v1
+
+All authenticated endpoints require:
+  Header: Authorization: Bearer <access_token>
+  Header: Content-Type: application/json  (except multipart uploads)
+
+PAGINATION — Standard response shape for all paginated endpoints:
+  {
+    count:       number,   // total items
+    next:        string | null,
+    previous:    string | null,
+    total_pages: number,
+    results:     T[]
+  }
+
+ERROR RESPONSE — RFC 7807 format (ALL errors from the backend):
+  {
+    error_code:  string,   // machine-readable code e.g. "INVALID_CREDENTIALS"
+    detail:      string,   // human-readable message
+    status_code: number,
+    timestamp:   string    // ISO 8601
+  }
+
+DRF validation errors (400) have this shape instead:
+  {
+    field_name: ["error message"],
+    non_field_errors: ["error message"]
+  }
+
+──────────────────────────────────────────────────────────────────────────────
+5.1 PUBLIC ENDPOINTS (no auth)
+──────────────────────────────────────────────────────────────────────────────
+
+GET /schools/active/
+  Purpose: Populate the school selection grid on the public login flow.
+  Query params:
+    page        (integer, default 1)
+    page_size   (integer, default 20)
+  Response 200:
+    PaginatedResponse<{
+      id:       string (UUID)
+      name:     string
+      slug:     string
+      logo_url: string
+    }>
+
+GET /schools/{id}/
+  Purpose: Fetch school detail for display on login/culture pages.
+  Response 200:
+    {
+      id:            string
+      name:          string
+      slug:          string
+      logo_url:      string
+      address:       string
+      contact_email: string
+      contact_phone: string
+    }
+
+──────────────────────────────────────────────────────────────────────────────
+5.2 AUTHENTICATION ENDPOINTS
+──────────────────────────────────────────────────────────────────────────────
+
+POST /auth/login/
+  Purpose: Dual-vector login for all roles.
+  Auth: None. Rate-limited: 5/minute per IP.
+  Request:
+    {
+      role:       "STUDENT" | "TEACHER" | "MAIN_ADMIN" | "SUB_ADMIN" | "VISITOR"
+      identifier: string   // admission number (STUDENT) or email (others)
+      password:   string
+      school_id:  string   // UUID — REQUIRED for all roles EXCEPT VISITOR
+    }
+  Response 200:
+    {
+      access:  string   // JWT, expires 15 minutes
+      refresh: string   // JWT, expires 7 days
+    }
+  Errors:
+    401 INVALID_CREDENTIALS   — wrong username/password
+    403 ACCOUNT_DISABLED      — is_active = false
+    403 ROLE_MISMATCH          — role param doesn't match stored role
+    403 EMAIL_NOT_VERIFIED     — VISITOR who hasn't verified email
+
+  JWT PAYLOAD (decoded from access token):
+    {
+      user_id:   string (UUID)
+      role:      string
+      school_id: string | null   // null for VISITOR
+      exp:       number
+      iat:       number
+    }
+
+POST /auth/token/refresh/
+  Purpose: Get a new access token using the refresh token.
+  Auth: None.
+  Request:  { refresh: string }
+  Response 200: { access: string }
+  Error:
+    401 — expired or blacklisted refresh token → user must re-login
+
+POST /auth/register/visitor/
+  Purpose: Self-service visitor account creation.
+  Auth: None. Rate-limited: 5/minute.
+  Request:
+    {
+      email:      string
+      password:   string
+      first_name: string
+      last_name:  string
+    }
+  Response 201:
+    { detail: "Account created. Please check your email to verify your address." }
+  Errors:
+    400 — validation errors (email already in use, weak password, etc.)
+
+POST /auth/verify-email/
+  Purpose: Complete visitor email verification. Token comes from email link.
+  Auth: None.
+  Request:  { token: string }  // UUID from ?token= query param
+  Response 200:
+    {
+      detail:  string
+      access:  string   // immediately logged in after verification
+      refresh: string
+    }
+  Errors:
+    400 INVALID_TOKEN  — token not found
+    400 TOKEN_EXPIRED  — token expired (24h TTL) — prompt to resend
+
+POST /auth/resend-verification/
+  Purpose: Re-send verification email. Always returns 200 (no enumeration).
+  Auth: None. Rate-limited: 5/minute.
+  Request:  { email: string }
+  Response 200: { detail: string }
+
+POST /auth/logout/
+  Purpose: Blacklist the refresh token.
+  Auth: Required.
+  Request:  { refresh: string }
+  Response 204: (no body)
+  Error:
+    400 MISSING_TOKEN / INVALID_TOKEN
+
+GET /auth/me/
+  Purpose: Fetch the authenticated user's own profile.
+  Auth: Required.
+  Response 200:
+    {
+      id:                string
+      email:             string | null
+      username:          string | null    // student admission number
+      role:              string
+      school:            string | null    // school UUID
+      first_name:        string
+      last_name:         string
+      is_email_verified: boolean
+      trial_expires_at:  string | null    // ISO 8601, visitors only
+      date_joined:       string
+    }
+
+PATCH /auth/me/
+  Purpose: Update own display name.
+  Auth: Required.
+  Request:  { first_name?: string, last_name?: string }
+  Response 200: (same shape as GET /auth/me/)
+
+POST /auth/password/change/
+  Purpose: Change own password (authenticated).
+  Auth: Required.
+  Request:
+    {
+      old_password:     string
+      new_password:     string
+      confirm_password: string
+    }
+  Response 204
+  Errors:
+    400 WRONG_PASSWORD     — old_password is incorrect
+    400 — validation (password too short, doesn't match, etc.)
+
+POST /auth/password/reset/
+  Purpose: Trigger a password reset email. Always 200 (no enumeration).
+  Auth: None.
+  Request:  { email: string }
+  Response 200: { detail: string }
+
+POST /auth/password/reset/confirm/
+  Purpose: Set new password using uid+token from reset email.
+  Auth: None.
+  Request:
+    {
+      uid:              string   // base64url-encoded user pk
+      token:            string   // Django PasswordResetTokenGenerator token
+      new_password:     string
+      confirm_password: string
+    }
+  Response 204
+  Errors:
+    400 INVALID_RESET_LINK — expired or invalid uid/token
+
+──────────────────────────────────────────────────────────────────────────────
+5.3 DAILY CONTENT (authenticated — any role)
+──────────────────────────────────────────────────────────────────────────────
+
+GET /daily-content/today/
+  Auth: Required.
+  Purpose: Fetch today's content for the requesting user's role.
+    STUDENT / VISITOR     → content_type: STUDENT_QUOTE
+    TEACHER               → content_type: TEACHER_TIP
+    MAIN_ADMIN / SUB_ADMIN → content_type: ADMIN_INSIGHT
+  Response 200:
+    {
+      id:           string
+      content_type: "STUDENT_QUOTE" | "TEACHER_TIP" | "ADMIN_INSIGHT"
+      body:         string
+      author:       string
+      display_date: string   // YYYY-MM-DD
+    }
+    OR null (if no content set for today)
+
+──────────────────────────────────────────────────────────────────────────────
+5.4 SCHOOL CULTURE (authenticated school member)
+──────────────────────────────────────────────────────────────────────────────
+
+GET /schools/{id}/culture/
+  Auth: Required. school_id in JWT must match {id}.
+  Response 200:
+    {
+      motto:              string
+      mission_statement:  string
+      vision_statement:   string
+      core_values:        string
+      school_creed:       string
+      founder_quotes: Array<{
+        quote:  string
+        author: string
+      }>
+      updated_at: string
+    }
+
+──────────────────────────────────────────────────────────────────────────────
+5.5 ADMIN — SCHOOL MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+All /admin/ endpoints require role: MAIN_ADMIN or SUB_ADMIN.
+school is automatically inferred from the admin's JWT — never passed explicitly.
+
+GET /admin/school/
+  Response 200: Full school object (all fields, read-only: id, onboarding_date, created_at, updated_at)
+    {
+      id:            string
+      name:          string
+      slug:          string
+      logo_url:      string
+      address:       string
+      contact_email: string
+      contact_phone: string
+      is_active:     boolean
+      onboarding_date: string
+      created_at:    string
+      updated_at:    string
+    }
+
+PATCH /admin/school/
+  Request: { name?, logo_url?, address?, contact_email?, contact_phone? }
+  NOTE: slug and is_active are platform-owner-only. Do NOT expose these in the admin UI.
+  Response 200: Full school object
+
+GET /admin/culture/
+  Response 200: SchoolCulture object (same shape as /schools/{id}/culture/)
+  NOTE: Returns empty strings if culture hasn't been configured yet.
+        Frontend should always be able to render the edit form.
+
+PUT /admin/culture/
+  NOTE: This is a full upsert — use PUT, not PATCH. Send ALL fields.
+  Request:
+    {
+      motto?:             string
+      mission_statement?: string
+      vision_statement?:  string
+      core_values?:       string
+      school_creed?:      string
+      founder_quotes?:    Array<{ quote: string, author: string }>
+    }
+  Response 200: Updated SchoolCulture object
+
+──────────────────────────────────────────────────────────────────────────────
+5.6 ADMIN — DAILY CONTENT MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+
+GET /admin/daily-content/
+  Query params:
+    content_type: "STUDENT_QUOTE" | "TEACHER_TIP" | "ADMIN_INSIGHT"
+    display_date: YYYY-MM-DD
+  Response 200: Array<DailyContent> (NOT paginated — returns flat array)
+    DailyContent:
+      {
+        id:           string
+        school:       string   // school UUID (read-only)
+        content_type: string
+        body:         string
+        author:       string
+        display_date: string   // YYYY-MM-DD
+        created_at:   string
+      }
+
+POST /admin/daily-content/
+  Request:
+    {
+      content_type: "STUDENT_QUOTE" | "TEACHER_TIP" | "ADMIN_INSIGHT"
+      body:         string
+      author:       string
+      display_date: string   // YYYY-MM-DD
+    }
+  Response 201: DailyContent
+  Errors:
+    409 DUPLICATE_ENTRY — a content entry of this type already exists for this date
+
+PATCH /admin/daily-content/{id}/
+  IMPORTANT: Only body and author are editable.
+  content_type and display_date are identity fields — cannot be changed.
+  To change type/date: delete and recreate.
+  Request: { body?: string, author?: string }
+  Response 200: DailyContent
+
+DELETE /admin/daily-content/{id}/
+  Response 204
+
+──────────────────────────────────────────────────────────────────────────────
+5.7 ADMIN — USER MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+
+GET /admin/users/
+  Query params:
+    role:      "STUDENT" | "TEACHER" | "SUB_ADMIN" | "MAIN_ADMIN"
+    is_active: "true" | "false"
+    search:    string (searches first_name, last_name, email, username)
+    page:      integer
+  Response 200: PaginatedResponse<UserListItem>
+    UserListItem:
+      {
+        id:         string
+        role:       string
+        first_name: string
+        last_name:  string
+        email:      string | null
+        username:   string | null
+        is_active:  boolean
+        date_joined: string
+      }
+
+POST /admin/users/
+  Purpose: Create STUDENT, TEACHER, or SUB_ADMIN in the school.
+  IMPORTANT: Only MAIN_ADMIN can create SUB_ADMIN accounts.
+  Request:
+    {
+      role:       "STUDENT" | "TEACHER" | "SUB_ADMIN"
+      first_name: string
+      last_name:  string
+      password:   string
+      email?:     string   // required for TEACHER and SUB_ADMIN
+      username?:  string   // required for STUDENT (admission number)
+    }
+  Response 201: UserDetail
+  Errors:
+    403 FORBIDDEN — SUB_ADMIN trying to create SUB_ADMIN
+    400 — validation errors
+
+POST /admin/users/bulk/
+  Purpose: Batch-create STUDENT accounts. Returns per-row results.
+  Request:
+    {
+      students: Array<{
+        first_name: string
+        last_name:  string
+        username:   string   // admission number
+        password:   string
+        email?:     string
+      }>
+    }
+  Response 201 (all success) or 207 Multi-Status (partial):
+    {
+      created: UserListItem[]
+      failed:  Array<{ username: string, error: string }>
+    }
+  Frontend must display a per-row import report showing successes and failures.
+
+GET /admin/users/{id}/
+  Response 200: UserDetail
+    {
+      id:          string
+      role:        string
+      first_name:  string
+      last_name:   string
+      email:       string | null
+      username:    string | null
+      school_name: string
+      is_active:   boolean
+      date_joined: string
+    }
+
+PATCH /admin/users/{id}/
+  Request: { first_name?, last_name?, is_active? }
+  NOTE: SUB_ADMIN cannot edit MAIN_ADMIN or SUB_ADMIN accounts.
+  Response 200: UserDetail
+  Errors:
+    403 FORBIDDEN — insufficient role
+    404 NOT_FOUND
+
+DELETE /admin/users/{id}/
+  Purpose: Soft-delete (sets is_active = false). MAIN_ADMIN cannot be deleted via this endpoint.
+  Response 204
+  Errors:
+    403 FORBIDDEN — cannot deactivate MAIN_ADMIN
+
+POST /admin/users/{id}/set-password/
+  Purpose: Admin resets a user's password directly (no old password required).
+  Request: { new_password: string, confirm_password: string }
+  Response 204
+  Errors:
+    403 FORBIDDEN — SUB_ADMIN cannot reset MAIN_ADMIN/SUB_ADMIN password
+
+──────────────────────────────────────────────────────────────────────────────
+5.8 PLATFORM OWNER — SCHOOL MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+Requires is_staff = true (platform owner only, not a school role).
+Read the is_staff flag from the JWT payload.
+
+GET /platform/schools/
+  Response 200: Array<School> (all schools, unpaginated)
+
+POST /platform/schools/
+  Request:
+    {
+      name:          string
+      slug:          string   // URL-friendly, unique
+      logo_url?:     string
+      address?:      string
+      contact_email?: string
+      contact_phone?: string
+    }
+  Response 201: School
+  Errors:
+    400 — slug already taken
+
+GET /platform/schools/{id}/
+  Response 200: Full School object
+
+PATCH /platform/schools/{id}/
+  Request: { name?, slug?, logo_url?, address?, contact_email?, contact_phone?, is_active? }
+  NOTE: is_active=false soft-deactivates the tenant (RLS denies all access).
+  Response 200: School
+
+DELETE /platform/schools/{id}/
+  Purpose: Soft-delete (sets is_active = false).
+  Response 204
+
+──────────────────────────────────────────────────────────────────────────────
+5.9 PHASE 2 — NOTE PIPELINE ENDPOINTS
+──────────────────────────────────────────────────────────────────────────────
+Allowed roles for upload: STUDENT, TEACHER (NOT VISITOR — no school association)
+Allowed roles for school browse: TEACHER, MAIN_ADMIN, SUB_ADMIN
+File size limit: 20 MB per file
+
+NOTE STATUS ENUM:
+  PENDING_OCR              — file uploaded, OCR task queued
+  AWAITING_STUDENT_APPROVAL — OCR complete, student must review & confirm text
+  PROCESSING_AI             — student confirmed, AI summary task running
+  READY                     — pipeline complete, AI output available
+  FAILED                    — unrecoverable error
+
+NOTE TYPE ENUM:
+  pdf   — PDF document
+  image — JPG, PNG, WEBP, GIF, TIFF
+  voice — MP3, MP4 audio, WAV, OGG, WEBM
+  text  — plain text (typed directly)
+
+ALLOWED MIME TYPES BY NOTE TYPE:
+  pdf:   application/pdf
+  image: image/jpeg, image/png, image/webp, image/gif, image/tiff
+  voice: audio/mpeg, audio/mp4, audio/wav, audio/ogg, audio/webm
+  text:  text/plain
+
+─────────────────────────
+
+POST /notes/upload/
+  Content-Type: multipart/form-data
+  Auth: STUDENT or TEACHER
+  Fields:
+    file:      File (required)
+    note_type: "pdf" | "image" | "voice" | "text"
+    subject?:  string (max 100 chars) e.g. "Mathematics"
+    topic?:    string (max 100 chars) e.g. "Algebra"
+    subtopic?: string (max 100 chars) e.g. "Simultaneous Equations"
+  Response 202:
+    {
+      note_id: string   // poll /notes/{note_id}/status/
+      task_id: string
+      status:  "PENDING_OCR" | "AWAITING_STUDENT_APPROVAL"
+    }
+  NOTE: text notes skip OCR and return status "AWAITING_STUDENT_APPROVAL" immediately.
+  Errors:
+    400 — file too large (>20MB), wrong MIME type
+
+POST /notes/upload/bulk/
+  Content-Type: multipart/form-data
+  Auth: STUDENT or TEACHER
+  Fields:
+    files[]:   File[] (multiple files, same key repeated)
+    note_type: string
+    subject?:  string
+    topic?:    string
+    subtopic?: string
+  Response 202 (all success) or 207 (partial failure):
+    {
+      uploaded: NoteListItem[]
+      failed:   Array<{ filename: string, error: string }>
+    }
+
+GET /notes/
+  Auth: Any authenticated school member (STUDENT / TEACHER / ADMIN)
+  Purpose: Lists only the requesting user's OWN notes.
+  Query params:
+    status:    NoteStatus
+    note_type: NoteType
+    subject:   string
+    search:    string (searches file_name, subject, topic, subtopic)
+    ordering:  "created_at" | "-created_at" | "updated_at" | "subject"
+    page:      integer
+  Response 200: PaginatedResponse<NoteListItem>
+    NoteListItem:
+      {
+        id:        string
+        file_name: string
+        note_type: string
+        subject:   string
+        topic:     string
+        subtopic:  string
+        status:    NoteStatus
+        created_at: string
+      }
+
+GET /notes/school/
+  Auth: TEACHER, MAIN_ADMIN, SUB_ADMIN only
+  Purpose: Browse ALL notes in the school (for teachers to find student notes for conformity).
+  Query params:
+    owner:     string (UUID — filter by student/teacher)
+    subject:   string
+    status:    NoteStatus
+    note_type: NoteType
+    search:    string
+    page:      integer
+  Response 200: PaginatedResponse<SchoolNoteListItem>
+    SchoolNoteListItem:
+      {
+        id:         string
+        owner_id:   string
+        owner_name: string
+        file_name:  string
+        note_type:  string
+        subject:    string
+        topic:      string
+        subtopic:   string
+        status:     NoteStatus
+        created_at: string
+      }
+
+GET /notes/{id}/
+  Auth: Owner only (students/teachers see their own notes)
+  Response 200: NoteDetail
+    {
+      id:                   string
+      owner_name:           string
+      file_url:             string   // direct URL to file in storage
+      file_name:            string
+      note_type:            string
+      file_size_bytes:      number
+      subject:              string
+      topic:                string
+      subtopic:             string
+      raw_ocr_text:         string   // populated after OCR
+      ai_summary_paragraph: string   // populated after AI
+      ai_bullet_points:     string[] // populated after AI
+      ai_key_points:        string[] // populated after AI
+      status:               NoteStatus
+      error_message:        string
+      created_at:           string
+      updated_at:           string
+    }
+
+GET /notes/{id}/status/
+  Auth: Owner only
+  Purpose: Lightweight polling — DO NOT poll /notes/{id}/ (too heavy).
+  Response 200:
+    {
+      id:            string
+      status:        NoteStatus
+      error_message: string
+      updated_at:    string
+    }
+
+POST /notes/{id}/confirm-ocr/
+  Auth: Owner only
+  Purpose: Student has reviewed the OCR text, corrected errors, and confirms it.
+           This triggers the AI summarization pipeline.
+  NOTE: Note must be in AWAITING_STUDENT_APPROVAL state — 409 otherwise.
+  Request:
+    {
+      confirmed_text: string   // minimum 10 characters after trimming
+    }
+  Response 202:
+    {
+      note_id: string
+      task_id: string
+      status:  "PROCESSING_AI"
+    }
+  Errors:
+    409 INVALID_STATE — note is not awaiting approval
+
+POST /notes/{id}/replace/
+  Content-Type: multipart/form-data
+  Auth: Owner only (STUDENT or TEACHER)
+  Purpose: Replace the existing file and restart the pipeline from scratch.
+           Old file is deleted from storage. All AI output is cleared.
+  Fields: same as single upload (file, note_type, subject, topic, subtopic)
+  Response 202:
+    { note_id: string, task_id: string, status: string }
+  Note: subject/topic/subtopic from the form update the note's metadata.
+
+PATCH /notes/{id}/update/
+  Auth: Owner only
+  Purpose: Update subject, topic, or subtopic metadata.
+  Request: { subject?, topic?, subtopic? }
+  Response 200: NoteListItem
+
+DELETE /notes/{id}/delete/
+  Auth: Owner only
+  Purpose: Hard delete — removes DB record AND file from storage.
+  Response 204
+
+──────────────────────────────────────────────────────────────────────────────
+5.10 PHASE 2 — CONFORMITY REPORT ENDPOINTS
+──────────────────────────────────────────────────────────────────────────────
+Allowed to CREATE: TEACHER only
+Allowed to VIEW: TEACHER (own reports), MAIN_ADMIN, SUB_ADMIN
+
+CONFORMITY STATUS ENUM:
+  PENDING    — created, AI task queued
+  PROCESSING — AI task running
+  DONE       — analysis complete
+  FAILED     — AI task failed after retries
+
+GET /notes/conformity/
+  Auth: TEACHER (own reports) | MAIN_ADMIN | SUB_ADMIN
+  Response 200: PaginatedResponse<ConformityReport>
+    ConformityReport:
+      {
+        id:                    string
+        student_note_id:       string
+        student_name:          string
+        teacher_note_id:       string
+        subject:               string
+        conformity_percentage: number   // 0.00 - 100.00 (populated when DONE)
+        similarity_analysis:   string   // populated when DONE
+        status:                ConformityStatus
+        generated_at:          string
+      }
+
+POST /notes/conformity/
+  Auth: TEACHER only
+  IMPORTANT PRECONDITIONS:
+    1. student_note_id must point to a note in the school with status READY
+    2. teacher_note_id must be owned by the requesting teacher with status READY
+  Request:
+    {
+      student_note_id: string   // UUID
+      teacher_note_id: string   // UUID (must be teacher's own note)
+    }
+  Response 202:
+    {
+      report_id: string
+      task_id:   string
+      status:    "PENDING"
+    }
+  Errors:
+    403 FORBIDDEN     — requester is not a TEACHER
+    404 NOT_FOUND     — note not found or not in school
+    409 INVALID_STATE — note is not READY
+
+GET /notes/conformity/{id}/
+  Auth: TEACHER (own) | MAIN_ADMIN | SUB_ADMIN
+  Response 200: ConformityReport (full, see above)
+
+GET /notes/conformity/{id}/status/
+  Auth: TEACHER (own) | MAIN_ADMIN | SUB_ADMIN
+  Purpose: Lightweight polling during AI analysis.
+  Response 200:
+    {
+      id:                    string
+      status:                ConformityStatus
+      conformity_percentage: number
+      generated_at:          string
+    }
+
+
+================================================================================
+6. TYPESCRIPT TYPE SYSTEM
+================================================================================
+
+Place in src/types/index.ts — supplement with auto-generated types from openapi-typescript.
+
+// ── Enums ─────────────────────────────────────────────────────────────────
+
+export type UserRole =
+  | 'STUDENT'
+  | 'TEACHER'
+  | 'MAIN_ADMIN'
+  | 'SUB_ADMIN'
+  | 'VISITOR';
+
+export type NoteStatus =
+  | 'PENDING_OCR'
+  | 'AWAITING_STUDENT_APPROVAL'
+  | 'PROCESSING_AI'
+  | 'READY'
+  | 'FAILED';
+
+export type NoteType = 'pdf' | 'image' | 'voice' | 'text';
+
+export type ContentType = 'STUDENT_QUOTE' | 'TEACHER_TIP' | 'ADMIN_INSIGHT';
+
+export type ConformityStatus = 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED';
+
+// ── JWT Payload ───────────────────────────────────────────────────────────
+
+export interface JWTPayload {
+  user_id:   string;
+  role:      UserRole;
+  school_id: string | null;
+  exp:       number;
+  iat:       number;
+}
+
+// ── Pagination ────────────────────────────────────────────────────────────
+
+export interface PaginatedResponse<T> {
+  count:       number;
+  next:        string | null;
+  previous:    string | null;
+  total_pages: number;
+  results:     T[];
+}
+
+// ── Error ─────────────────────────────────────────────────────────────────
+
+export interface APIError {
+  error_code:  string;
+  detail:      string;
+  status_code: number;
+  timestamp:   string;
+}
+
+// ── Schools ───────────────────────────────────────────────────────────────
+
+export interface SchoolPublic {
+  id:       string;
+  name:     string;
+  slug:     string;
+  logo_url: string;
+}
+
+export interface SchoolDetail extends SchoolPublic {
+  address:       string;
+  contact_email: string;
+  contact_phone: string;
+}
+
+export interface SchoolAdmin extends SchoolDetail {
+  is_active:       boolean;
+  onboarding_date: string;
+  created_at:      string;
+  updated_at:      string;
+}
+
+export interface SchoolCulture {
+  motto:             string;
+  mission_statement: string;
+  vision_statement:  string;
+  core_values:       string;
+  school_creed:      string;
+  founder_quotes:    Array<{ quote: string; author: string }>;
+  updated_at:        string;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+
+export interface TokenPair {
+  access:  string;
+  refresh: string;
+}
+
+export interface UserProfile {
+  id:                string;
+  email:             string | null;
+  username:          string | null;
+  role:              UserRole;
+  school:            string | null;
+  first_name:        string;
+  last_name:         string;
+  is_email_verified: boolean;
+  trial_expires_at:  string | null;
+  date_joined:       string;
+}
+
+// ── Daily Content ─────────────────────────────────────────────────────────
+
+export interface DailyContent {
+  id:           string;
+  content_type: ContentType;
+  body:         string;
+  author:       string;
+  display_date: string;
+}
+
+// ── Admin Users ───────────────────────────────────────────────────────────
+
+export interface UserListItem {
+  id:          string;
+  role:        UserRole;
+  first_name:  string;
+  last_name:   string;
+  email:       string | null;
+  username:    string | null;
+  is_active:   boolean;
+  date_joined: string;
+}
+
+export interface UserDetail extends UserListItem {
+  school_name: string;
+}
+
+// ── Notes ─────────────────────────────────────────────────────────────────
+
+export interface NoteListItem {
+  id:         string;
+  file_name:  string;
+  note_type:  NoteType;
+  subject:    string;
+  topic:      string;
+  subtopic:   string;
+  status:     NoteStatus;
+  created_at: string;
+}
+
+export interface SchoolNoteListItem extends NoteListItem {
+  owner_id:   string;
+  owner_name: string;
+}
+
+export interface NoteDetail {
+  id:                   string;
+  owner_name:           string;
+  file_url:             string;
+  file_name:            string;
+  note_type:            NoteType;
+  file_size_bytes:      number;
+  subject:              string;
+  topic:                string;
+  subtopic:             string;
+  raw_ocr_text:         string;
+  ai_summary_paragraph: string;
+  ai_bullet_points:     string[];
+  ai_key_points:        string[];
+  status:               NoteStatus;
+  error_message:        string;
+  created_at:           string;
+  updated_at:           string;
+}
+
+export interface NoteStatusPoll {
+  id:            string;
+  status:        NoteStatus;
+  error_message: string;
+  updated_at:    string;
+}
+
+// ── Conformity ────────────────────────────────────────────────────────────
+
+export interface ConformityReport {
+  id:                    string;
+  student_note_id:       string;
+  student_name:          string;
+  teacher_note_id:       string;
+  subject:               string;
+  conformity_percentage: number;
+  similarity_analysis:   string;
+  status:                ConformityStatus;
+  generated_at:          string;
+}
+
+export interface ConformityStatusPoll {
+  id:                    string;
+  status:                ConformityStatus;
+  conformity_percentage: number;
+  generated_at:          string;
+}
+
+
+================================================================================
+7. API CLIENT SETUP
+================================================================================
+
+File: src/lib/api/client.ts
+
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { getTokens, setAccessToken, clearTokens } from '@/lib/token';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL + '/api/v1';
+
+export const apiClient = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 30_000,
+});
+
+// ── Request interceptor — inject Bearer token ─────────────────────────────
+apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const { access } = getTokens();
+  if (access) {
+    config.headers.Authorization = `Bearer ${access}`;
+  }
+  return config;
+});
+
+// ── Response interceptor — silent token refresh ───────────────────────────
+let isRefreshing = false;
+let failedQueue: Array<{
+  resolve: (token: string) => void;
+  reject:  (err: unknown) => void;
+}> = [];
+
+const processQueue = (error: unknown, token: string | null) => {
+  failedQueue.forEach(({ resolve, reject }) =>
+    error ? reject(error) : resolve(token!)
+  );
+  failedQueue = [];
+};
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then((token) => {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+          return apiClient(originalRequest);
+        });
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const { refresh } = getTokens();
+      if (!refresh) {
+        clearTokens();
+        window.location.href = '/';
+        return Promise.reject(error);
+      }
+
+      try {
+        const { data } = await axios.post(`${API_BASE}/auth/token/refresh/`, { refresh });
+        setAccessToken(data.access);
+        processQueue(null, data.access);
+        originalRequest.headers.Authorization = `Bearer ${data.access}`;
+        return apiClient(originalRequest);
+      } catch (refreshError) {
+        processQueue(refreshError, null);
+        clearTokens();
+        window.location.href = '/?session=expired';
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+File: src/lib/token.ts
+
+const ACCESS_KEY  = 'gsb_access';
+const REFRESH_KEY = 'gsb_refresh';
+
+// SECURITY NOTE: Use sessionStorage (clears on tab close) for access tokens.
+// For a higher-security deployment, store tokens in httpOnly cookies via a
+// Next.js API route acting as a BFF proxy. For the MVP, sessionStorage is
+// acceptable but document the tradeoff.
+
+export const getTokens = () => ({
+  access:  sessionStorage.getItem(ACCESS_KEY)  ?? '',
+  refresh: localStorage.getItem(REFRESH_KEY)   ?? '',
+});
+
+export const setTokens = (access: string, refresh: string) => {
+  sessionStorage.setItem(ACCESS_KEY,  access);
+  localStorage.setItem(REFRESH_KEY,   refresh);
+};
+
+export const setAccessToken = (access: string) => {
+  sessionStorage.setItem(ACCESS_KEY, access);
+};
+
+export const clearTokens = () => {
+  sessionStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+};
+
+// Decode JWT payload WITHOUT verification (verification is the server's job).
+export const decodeToken = (token: string): JWTPayload | null => {
+  try {
+    const { jwtDecode } = await import('jwt-decode');
+    return jwtDecode<JWTPayload>(token);
+  } catch {
+    return null;
+  }
+};
+
+// Use the synchronous version:
+import { jwtDecode } from 'jwt-decode';
+import type { JWTPayload } from '@/types';
+
+export const decodeTokenSync = (token: string): JWTPayload | null => {
+  try { return jwtDecode<JWTPayload>(token); }
+  catch { return null; }
+};
+
+
+================================================================================
+8. AUTHENTICATION ARCHITECTURE & TOKEN STRATEGY
+================================================================================
+
+PRE-LOGIN STATE MACHINE
+────────────────────────
+The login flow has a specific multi-step sequence that must be maintained:
+
+  Step 1: User arrives at landing page.
+  Step 2: User chooses "Enter as Visitor" OR "Enter Through School".
+
+  PATH A — Visitor:
+    → /register (visitor registration form)
+    → Check email → /verify-email?token=<uuid>
+    → Verified → tokens issued → /visitor/dashboard
+
+  PATH B — School User:
+    → /schools (paginated school grid, search bar)
+    → Click school card → store school in Zustand (schoolStore)
+    → /login?school_id=<uuid>&school_name=<name>
+    → Role selection (Student / Teacher / Admin tabs on login page)
+    → Submit credentials → tokens issued → role-specific dashboard
+
+TOKEN STORAGE STRATEGY
+───────────────────────
+  access token  → sessionStorage (automatically cleared when browser tab closes)
+  refresh token → localStorage   (persists across browser sessions for 7 days)
+
+On app load:
+  1. Read access token from sessionStorage.
+  2. If missing but refresh exists in localStorage → call /auth/token/refresh/
+     silently before rendering protected pages.
+  3. If both missing → user is unauthenticated → redirect to landing.
+
+ZUSTAND AUTH STORE
+───────────────────
+On successful login:
+  1. Call setTokens(access, refresh)
+  2. Decode access token → extract { user_id, role, school_id }
+  3. Store decoded payload in authStore
+  4. Redirect based on role:
+       STUDENT    → /student/dashboard
+       TEACHER    → /teacher/dashboard
+       MAIN_ADMIN → /admin/dashboard
+       SUB_ADMIN  → /admin/dashboard
+       VISITOR    → /visitor/dashboard
+       is_staff   → /platform/dashboard  (check this AFTER decoding JWT)
+
+ROUTE PROTECTION STRATEGY
+───────────────────────────
+Use Next.js middleware (src/middleware.ts) for server-side token existence checks.
+Use RoleGuard component for client-side role checks within route groups.
+
+src/middleware.ts skeleton:
+  import { NextResponse } from 'next/server';
+  import type { NextRequest } from 'next/server';
+
+  const PUBLIC_PATHS = ['/', '/schools', '/login', '/register',
+                        '/verify-email', '/forgot-password', '/reset-password'];
+
+  export function middleware(request: NextRequest) {
+    const { pathname } = request.nextUrl;
+    const isPublic = PUBLIC_PATHS.some(p => pathname.startsWith(p));
+    const refreshToken = request.cookies.get('gsb_refresh')?.value;
+    // If using cookies — redirect to login if no refresh token on protected path
+    if (!isPublic && !refreshToken) {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+    return NextResponse.next();
+  }
+
+NOTE: If storing tokens in localStorage/sessionStorage (not cookies), middleware
+cannot read them. In that case, use client-side RoleGuard in each layout.tsx.
+
+
+================================================================================
+9. STATE MANAGEMENT — ZUSTAND STORES
+================================================================================
+
+File: src/stores/authStore.ts
+
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import type { UserRole, JWTPayload } from '@/types';
+
+interface AuthState {
+  accessToken:  string | null;
+  refreshToken: string | null;
+  userId:       string | null;
+  role:         UserRole | null;
+  schoolId:     string | null;
+  isStaff:      boolean;
+  isAuthenticated: boolean;
+
+  setTokens:    (access: string, refresh: string, payload: JWTPayload) => void;
+  clearAuth:    () => void;
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      accessToken:     null,
+      refreshToken:    null,
+      userId:          null,
+      role:            null,
+      schoolId:        null,
+      isStaff:         false,
+      isAuthenticated: false,
+
+      setTokens: (access, refresh, payload) => set({
+        accessToken:     access,
+        refreshToken:    refresh,
+        userId:          payload.user_id,
+        role:            payload.role,
+        schoolId:        payload.school_id,
+        isStaff:         false, // set separately if is_staff is in payload
+        isAuthenticated: true,
+      }),
+
+      clearAuth: () => set({
+        accessToken: null, refreshToken: null,
+        userId: null, role: null, schoolId: null,
+        isStaff: false, isAuthenticated: false,
+      }),
+    }),
+    {
+      name: 'gsb-auth',
+      partialize: (state) => ({
+        // Only persist non-sensitive routing state
+        role: state.role,
+        schoolId: state.schoolId,
+        isAuthenticated: state.isAuthenticated,
+      }),
+    }
+  )
+);
+
+File: src/stores/schoolStore.ts
+  (Stores the school selected BEFORE login — needed on the login page)
+
+import { create } from 'zustand';
+import type { SchoolPublic } from '@/types';
+
+interface SchoolState {
+  selectedSchool: SchoolPublic | null;
+  setSelectedSchool: (school: SchoolPublic | null) => void;
+}
+
+export const useSchoolStore = create<SchoolState>()((set) => ({
+  selectedSchool: null,
+  setSelectedSchool: (school) => set({ selectedSchool: school }),
+}));
+
+
+================================================================================
+10. TANSTACK QUERY — CONFIGURATION & KEY PATTERNS
+================================================================================
+
+FILE: src/app/layout.tsx (Root layout — wrap entire app)
+
+'use client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { useState } from 'react';
+
+export default function RootLayout({ children }) {
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime:            60 * 1000,    // 1 minute
+        gcTime:               5 * 60 * 1000, // 5 minutes (formerly cacheTime)
+        retry:                1,
+        refetchOnWindowFocus: false,
+      },
+    },
+  }));
+
+  return (
+    <html>
+      <body>
+        <QueryClientProvider client={queryClient}>
+          {children}
+          <ReactQueryDevtools initialIsOpen={false} />
+        </QueryClientProvider>
+      </body>
+    </html>
+  );
+}
+
+QUERY KEY FACTORY (src/lib/query-keys.ts)
+──────────────────────────────────────────
+Centralise all query keys to prevent typos and enable targeted invalidation.
+
+export const queryKeys = {
+  schools: {
+    all:    ()         => ['schools'] as const,
+    active: ()         => ['schools', 'active'] as const,
+    detail: (id: string) => ['schools', id] as const,
+    culture:(id: string) => ['schools', id, 'culture'] as const,
+  },
+  auth: {
+    me: () => ['auth', 'me'] as const,
+  },
+  dailyContent: {
+    today: () => ['daily-content', 'today'] as const,
+  },
+  notes: {
+    all:        (filters?: object) => ['notes', filters] as const,
+    school:     (filters?: object) => ['notes', 'school', filters] as const,
+    detail:     (id: string)       => ['notes', id] as const,
+    status:     (id: string)       => ['notes', id, 'status'] as const,
+  },
+  conformity: {
+    all:    (filters?: object) => ['conformity', filters] as const,
+    detail: (id: string)       => ['conformity', id] as const,
+    status: (id: string)       => ['conformity', id, 'status'] as const,
+  },
+  adminUsers: {
+    all:    (filters?: object) => ['admin', 'users', filters] as const,
+    detail: (id: string)       => ['admin', 'users', id] as const,
+  },
+  adminSchool: () => ['admin', 'school'] as const,
+  adminCulture:() => ['admin', 'culture'] as const,
+  platformSchools: () => ['platform', 'schools'] as const,
+};
+
+POLLING PATTERN — Note Status
+───────────────────────────────
+// src/hooks/useNotePoller.ts
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
+import { getNoteStatus } from '@/lib/api/notes';
+import type { NoteStatus } from '@/types';
+
+const TERMINAL_STATES: NoteStatus[] = [
+  'READY',
+  'FAILED',
+  'AWAITING_STUDENT_APPROVAL',  // Requires user action — stop auto-polling
+];
+
+export function useNotePoller(noteId: string, initialStatus: NoteStatus) {
+  return useQuery({
+    queryKey: queryKeys.notes.status(noteId),
+    queryFn:  () => getNoteStatus(noteId),
+    enabled:  !!noteId,
+    // Poll every 3 seconds while in an active processing state
+    refetchInterval: (query) => {
+      const status = query.state.data?.status ?? initialStatus;
+      return TERMINAL_STATES.includes(status) ? false : 3000;
+    },
+    refetchIntervalInBackground: false,
+  });
+}
+
+POLLING PATTERN — Conformity Report
+─────────────────────────────────────
+// src/hooks/useConformityPoller.ts
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
+import { getConformityStatus } from '@/lib/api/notes';
+import type { ConformityStatus } from '@/types';
+
+const TERMINAL: ConformityStatus[] = ['DONE', 'FAILED'];
+
+export function useConformityPoller(reportId: string) {
+  return useQuery({
+    queryKey: queryKeys.conformity.status(reportId),
+    queryFn:  () => getConformityStatus(reportId),
+    enabled:  !!reportId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && TERMINAL.includes(status) ? false : 4000;
+    },
+  });
+}
+
+MUTATION PATTERN — Login
+─────────────────────────
+import { useMutation } from '@tanstack/react-query';
+import { login } from '@/lib/api/auth';
+import { useAuthStore } from '@/stores/authStore';
+import { decodeTokenSync } from '@/lib/token';
+import { useRouter } from 'next/navigation';
+
+export function useLogin() {
+  const { setTokens } = useAuthStore();
+  const router = useRouter();
+
+  return useMutation({
+    mutationFn: login,
+    onSuccess: (data) => {
+      const payload = decodeTokenSync(data.access);
+      if (!payload) throw new Error('Invalid token received');
+      setTokens(data.access, data.refresh, payload);
+      // Role-based redirect
+      const routes: Record<string, string> = {
+        STUDENT:    '/student/dashboard',
+        TEACHER:    '/teacher/dashboard',
+        MAIN_ADMIN: '/admin/dashboard',
+        SUB_ADMIN:  '/admin/dashboard',
+        VISITOR:    '/visitor/dashboard',
+      };
+      router.push(routes[payload.role] ?? '/');
+    },
+  });
+}
+
+MUTATION PATTERN — Note Upload
+───────────────────────────────
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { uploadNote } from '@/lib/api/notes';
+import { queryKeys } from '@/lib/query-keys';
+import { useRouter } from 'next/navigation';
+
+export function useUploadNote() {
+  const queryClient = useQueryClient();
+  const router = useRouter();
+
+  return useMutation({
+    mutationFn: (formData: FormData) => uploadNote(formData),
+    onSuccess: (data) => {
+      // Invalidate the note list so it refetches
+      queryClient.invalidateQueries({ queryKey: queryKeys.notes.all() });
+      // Navigate to the status/review page
+      router.push(`/student/notes/${data.note_id}/status`);
+    },
+  });
+}
+
+
+================================================================================
+11. NEXT.JS APP ROUTER — ROUTE MAP & PROTECTION
+================================================================================
+
+PUBLIC ROUTES (no auth required):
+  /                           Landing page (two entry buttons)
+  /schools                    School selection grid
+  /login                      Login form (query: ?school_id=&role=)
+  /register                   Visitor registration
+  /verify-email               Email verification (query: ?token=)
+  /forgot-password            Request password reset
+  /reset-password             Confirm reset (query: ?uid=&token=)
+
+STUDENT ROUTES (role: STUDENT):
+  /student/dashboard
+  /student/notes
+  /student/notes/upload
+  /student/notes/[id]
+  /student/notes/[id]/review   ← OCR review screen (status: AWAITING_STUDENT_APPROVAL)
+  /student/notes/[id]/status   ← Polling screen (status: PENDING_OCR | PROCESSING_AI)
+  /student/profile
+
+TEACHER ROUTES (role: TEACHER):
+  /teacher/dashboard
+  /teacher/notes
+  /teacher/notes/upload
+  /teacher/notes/school        ← Browse all school notes
+  /teacher/notes/[id]
+  /teacher/conformity
+  /teacher/conformity/new
+  /teacher/conformity/[id]
+
+ADMIN ROUTES (roles: MAIN_ADMIN, SUB_ADMIN):
+  /admin/dashboard
+  /admin/school
+  /admin/culture
+  /admin/daily-content
+  /admin/daily-content/new
+  /admin/daily-content/[id]
+  /admin/users
+  /admin/users/new
+  /admin/users/import
+  /admin/users/[id]
+
+VISITOR ROUTES (role: VISITOR):
+  /visitor/dashboard
+  /visitor/notes
+  /visitor/notes/upload
+  /visitor/notes/[id]
+
+PLATFORM ROUTES (is_staff: true):
+  /platform/dashboard
+  /platform/schools
+  /platform/schools/new
+  /platform/schools/[id]
+
+LAYOUT HIERARCHY:
+  app/layout.tsx                  ← QueryClient + Toaster + root HTML
+  ├── (public)/layout.tsx         ← Minimal layout, no sidebar
+  ├── (student)/layout.tsx        ← Student sidebar + TopBar
+  ├── (teacher)/layout.tsx        ← Teacher sidebar + TopBar
+  ├── (admin)/layout.tsx          ← Admin sidebar + TopBar
+  ├── (visitor)/layout.tsx        ← Visitor sidebar + trial expiry banner
+  └── (platform)/layout.tsx      ← Platform owner sidebar
+
+
+================================================================================
+12. DESIGN SYSTEM
+================================================================================
+
+COLOUR PALETTE (Tailwind CSS custom tokens in tailwind.config.ts)
+──────────────────────────────────────────────────────────────────
+Primary brand colour: Deep Indigo/Blue (academic, professional, trustworthy)
+Accent: Amber/Gold (achievement, energy)
+
+  primary:    { DEFAULT: '#4F46E5', // indigo-600
+                hover:   '#4338CA', // indigo-700
+                light:   '#EEF2FF', // indigo-50
+              }
+  accent:     { DEFAULT: '#F59E0B', // amber-500
+                hover:   '#D97706', // amber-600
+              }
+  success:    '#10B981'  // emerald-500
+  warning:    '#F59E0B'  // amber-500
+  danger:     '#EF4444'  // red-500
+  info:       '#3B82F6'  // blue-500
+
+  neutral:    {
+    50:  '#F9FAFB',
+    100: '#F3F4F6',
+    200: '#E5E7EB',
+    300: '#D1D5DB',
+    400: '#9CA3AF',
+    500: '#6B7280',
+    600: '#4B5563',
+    700: '#374151',
+    800: '#1F2937',
+    900: '#111827',
+  }
+
+STATUS COLOURS (for NoteStatusBadge):
+  PENDING_OCR:              bg-blue-100   text-blue-700
+  AWAITING_STUDENT_APPROVAL: bg-amber-100  text-amber-700
+  PROCESSING_AI:            bg-purple-100 text-purple-700
+  READY:                    bg-green-100  text-green-700
+  FAILED:                   bg-red-100    text-red-700
+
+  PENDING:    bg-gray-100   text-gray-600
+  PROCESSING: bg-purple-100 text-purple-700
+  DONE:       bg-green-100  text-green-700
+  FAILED:     bg-red-100    text-red-700
+
+TYPOGRAPHY
+───────────
+  Font family:
+    headings: 'Inter' (or 'DM Sans') — Google Fonts, variable font
+    body:     'Inter'
+    monospace: 'JetBrains Mono' — for OCR text review editor
+
+  Scale (Tailwind defaults are sufficient):
+    h1: text-3xl font-bold    (page titles)
+    h2: text-2xl font-semibold (section headings)
+    h3: text-xl  font-semibold (card headings)
+    body: text-sm / text-base
+    caption: text-xs text-neutral-500
+
+SPACING & LAYOUT
+─────────────────
+  Sidebar width:  w-64 (256px) on desktop
+  Content padding: p-6 on desktop, p-4 on mobile
+  Card radius:     rounded-xl
+  Button radius:   rounded-lg
+  Input radius:    rounded-md
+  Max content width: max-w-7xl mx-auto
+
+RESPONSIVE BREAKPOINTS (Tailwind defaults):
+  sm:  640px   (large phone landscape)
+  md:  768px   (tablet)
+  lg:  1024px  (laptop / small desktop)
+  xl:  1280px  (desktop)
+  2xl: 1536px  (large desktop)
+
+  Sidebar:  hidden on mobile (< lg), drawer overlay on tablet, static on desktop
+  Tables:   horizontal scroll on mobile, full on desktop
+  Forms:    single column on mobile, two columns on tablet+
+
+SHADCN/UI COMPONENTS TO INSTALL
+─────────────────────────────────
+Install via: npx shadcn@latest add <component>
+
+  button, input, textarea, label, select, checkbox, radio-group,
+  card, badge, avatar,
+  dialog, sheet, alert-dialog, drawer,
+  table, pagination,
+  tabs, accordion,
+  toast (use sonner), progress,
+  skeleton,
+  dropdown-menu, context-menu,
+  form (react-hook-form integration),
+  separator, scroll-area,
+  command (for school search),
+  calendar, date-picker (for daily content date selection)
+
+COMPONENT DESIGN PATTERNS
+───────────────────────────
+1. NoteStatusBadge  — render a coloured badge from a NoteStatus value
+2. PageHeader       — title + optional breadcrumb + optional CTA button
+3. EmptyState       — icon + heading + subtext + optional action button
+4. ErrorState       — show API error with retry button
+5. ConfirmDialog    — "Are you sure?" alert dialog used for destructive actions
+6. PaginationControls — reusable component consuming PaginatedResponse metadata
+
+
+================================================================================
+13. PHASE 1 — SCREEN-BY-SCREEN BREAKDOWN
+================================================================================
+
+──────────────────────────────────────────────────────
+SCREEN 1: LANDING PAGE  /
+──────────────────────────────────────────────────────
+Purpose: Entry gate. User chooses their path.
+
+Layout:
+  - Full-screen hero with GSB logo, tagline
+  - Two prominent CTA buttons (centre-screen):
+      [Enter as Visitor]           → /register
+      [Enter Through Your School]  → /schools
+  - Brief platform description below buttons
+
+UX Notes:
+  - No login form on this page — it is purely a navigation gate
+  - If user is already authenticated (token in storage), show a
+    "Continue to Dashboard" button instead
+  - Mobile: stack buttons vertically
+
+──────────────────────────────────────────────────────
+SCREEN 2: SCHOOL SELECTION  /schools
+──────────────────────────────────────────────────────
+Purpose: Let user find and select their school before logging in.
+
+Data: GET /schools/active/ (paginated, 20 per page)
+
+Layout:
+  - Search bar at top (client-side or server-side filter — prefer client-side
+    for <100 schools, server-side ?search= param for larger sets)
+  - Responsive grid of SchoolCard components:
+      Each card: school logo + name + slug
+      Hover: subtle elevation + border highlight
+  - Pagination controls below grid
+  - Loading state: skeleton cards (8 skeleton cards while loading)
+  - Empty state: "No schools found matching your search"
+
+SchoolCard interaction:
+  1. Click card → store school in useSchoolStore
+  2. Navigate to /login?school_id={id}&school_name={name}
+
+UX Notes:
+  - Show school logo prominently (fallback: first letter of school name)
+  - Search should debounce at 300ms before filtering
+
+──────────────────────────────────────────────────────
+SCREEN 3: LOGIN  /login
+──────────────────────────────────────────────────────
+Purpose: Role-specific login form for school users.
+
+Query params received: school_id, school_name
+
+Layout:
+  - School info banner at top (logo + name from query params / schoolStore)
+  - Role selection tabs or segmented control:
+      [Student]  [Teacher]  [Admin]
+  - Form fields change based on selected role:
+
+  STUDENT tab:
+    - Admission Number (text input — maps to "identifier")
+    - Password (password input)
+    - [Login as Student] button
+
+  TEACHER tab:
+    - Email Address
+    - Password
+    - [Login as Teacher] button
+
+  ADMIN tab:
+    - Email Address
+    - Password
+    - [Login as Admin] button
+    - NOTE: Backend determines MAIN_ADMIN vs SUB_ADMIN automatically
+
+  - "Forgot password?" link → /forgot-password
+  - "← Back to school selection" link → /schools
+
+Form submission:
+  1. Determine role from active tab
+  2. Call POST /auth/login/ with { role, identifier, password, school_id }
+  3. On success: decode token, store in Zustand, redirect to role dashboard
+  4. On 401/403: show toast error with detail from API response
+
+Error handling:
+  - 401 INVALID_CREDENTIALS → "Invalid credentials. Please check and try again."
+  - 403 ACCOUNT_DISABLED    → "This account has been deactivated. Contact your school admin."
+  - 403 EMAIL_NOT_VERIFIED  → Show resend-verification option with email input
+
+Zod schema for Student:
+  z.object({ identifier: z.string().min(1), password: z.string().min(1) })
+
+Zod schema for Teacher/Admin:
+  z.object({ identifier: z.email("Please enter a valid email"), password: z.string().min(1) })
+
+──────────────────────────────────────────────────────
+SCREEN 4: VISITOR REGISTRATION  /register
+──────────────────────────────────────────────────────
+Purpose: Create a visitor account. Triggers email verification.
+
+Data: POST /auth/register/visitor/
+
+Layout:
+  - Card-centred layout (max-w-md, centred)
+  - Fields:
+      First Name
+      Last Name
+      Email Address
+      Password
+      Confirm Password
+  - Terms note: "Your account includes a 1-week free trial."
+  - [Create Account] button
+  - "Already have an account? Login as Visitor" link
+
+After successful submission:
+  - Hide form
+  - Show success state:
+      Checkmark icon
+      "Check your inbox!"
+      "We've sent a verification link to {email}"
+      [Resend verification email] button (calls /auth/resend-verification/)
+      Note: "The link expires in 24 hours."
+
+Zod schema:
+  z.object({
+    first_name: z.string().min(1, "Required"),
+    last_name:  z.string().min(1, "Required"),
+    email:      z.string().email(),
+    password:   z.string().min(8, "At least 8 characters"),
+    confirm:    z.string(),
+  }).refine(d => d.password === d.confirm, {
+    message: "Passwords don't match",
+    path: ['confirm'],
+  });
+
+──────────────────────────────────────────────────────
+SCREEN 5: EMAIL VERIFICATION  /verify-email
+──────────────────────────────────────────────────────
+Purpose: Complete email verification when user clicks the link in their email.
+
+URL example: /verify-email?token=550e8400-e29b-41d4-a716-446655440000
+
+Behaviour:
+  1. On page mount, read token from URL query params
+  2. If token present: automatically call POST /auth/verify-email/ with { token }
+     (show loading spinner while calling)
+  3. On success: store tokens, redirect to /visitor/dashboard
+  4. On error TOKEN_EXPIRED:
+       Show: "Verification link has expired."
+       Show form to enter email + [Resend verification] button
+  5. On error INVALID_TOKEN:
+       Show: "Invalid verification link."
+       Link back to /register
+
+No user input needed for the happy path — it auto-submits on load.
+
+──────────────────────────────────────────────────────
+SCREEN 6: FORGOT PASSWORD  /forgot-password
+──────────────────────────────────────────────────────
+Data: POST /auth/password/reset/
+
+Layout:
+  - Email input field
+  - [Send reset link] button
+  - After submit (regardless of response): show success state:
+      "If an account with that email exists, a reset link has been sent."
+      (Do NOT confirm whether email exists — prevents enumeration)
+  - Link back to login
+
+──────────────────────────────────────────────────────
+SCREEN 7: RESET PASSWORD  /reset-password
+──────────────────────────────────────────────────────
+Data: POST /auth/password/reset/confirm/
+
+URL example: /reset-password?uid=MTIz&token=abc-def-ghi
+
+Behaviour:
+  1. Read uid and token from URL query params
+  2. Show form: New Password + Confirm Password
+  3. On submit: call POST /auth/password/reset/confirm/ with { uid, token, new_password, confirm_password }
+  4. On success: show "Password reset successfully!" → redirect to /login after 3s
+  5. On 400 INVALID_RESET_LINK: "This reset link is invalid or has expired."
+
+──────────────────────────────────────────────────────
+SCREEN 8: STUDENT DASHBOARD  /student/dashboard
+──────────────────────────────────────────────────────
+Data:
+  - GET /auth/me/              → welcome message (first_name)
+  - GET /daily-content/today/  → daily student quote
+
+Layout (desktop):
+  - Left sidebar: navigation links
+  - Main area:
+      Welcome header: "Good morning, {first_name}!"
+      DailyContentBanner: quote of the day with decorative styling
+      Quick stats cards (Phase 2 onward — placeholder in Phase 1):
+        Total Notes, Notes Ready, Subjects Covered
+      Recent notes list (top 5 from GET /notes/)
+      Quick action button: "Upload Note →"
+
+──────────────────────────────────────────────────────
+SCREEN 9: TEACHER DASHBOARD  /teacher/dashboard
+──────────────────────────────────────────────────────
+Data:
+  - GET /auth/me/
+  - GET /daily-content/today/  → daily teacher tip
+
+Layout:
+  - Welcome header
+  - DailyContentBanner: teacher tip of the day
+  - Quick stats: My Notes, Conformity Reports, School Notes
+  - Recent activity: last 5 notes + last 3 conformity reports
+
+──────────────────────────────────────────────────────
+SCREEN 10: ADMIN DASHBOARD  /admin/dashboard
+──────────────────────────────────────────────────────
+Data:
+  - GET /auth/me/
+  - GET /daily-content/today/  → admin insight
+  - GET /admin/users/?page=1   → user count from `count` field
+
+Layout:
+  - Welcome header + school name
+  - DailyContentBanner: admin insight of the day
+  - Stats cards:
+      Total Users, Active Students, Teachers, Sub-Admins
+  - Quick actions:
+      [Manage Users], [Edit School Info], [Manage Culture], [Daily Content]
+
+──────────────────────────────────────────────────────
+SCREEN 11: ADMIN — SCHOOL INFO  /admin/school
+──────────────────────────────────────────────────────
+Data:
+  - GET  /admin/school/   (on load)
+  - PATCH /admin/school/  (on save)
+
+Layout:
+  - Page header: "School Information"
+  - Form (always in view-mode; click Edit to enable inputs):
+      School Name
+      Logo URL (with preview image thumbnail)
+      Address (textarea)
+      Contact Email
+      Contact Phone
+  - Read-only display: Slug, Is Active, Onboarding Date
+    (With note: "Contact platform support to change these settings.")
+  - [Edit] button toggles form to edit mode
+  - [Save Changes] + [Cancel] buttons in edit mode
+
+UX Notes:
+  - Use optimistic update: update UI immediately, show toast on API response
+  - Validate before submitting (email format, non-empty name)
+
+──────────────────────────────────────────────────────
+SCREEN 12: ADMIN — SCHOOL CULTURE  /admin/culture
+──────────────────────────────────────────────────────
+Data:
+  - GET /admin/culture/
+  - PUT /admin/culture/   (full upsert — always send all fields)
+
+Layout:
+  - Page header: "School Culture & Identity"
+  - Tabbed or section-based form:
+      Tab 1 — Identity:
+        Motto (text input)
+        Mission Statement (textarea)
+        Vision Statement (textarea)
+        School Creed (textarea)
+        Core Values (textarea — comma-separated or list editor)
+
+      Tab 2 — Founder Quotes:
+        Dynamic list: each row has "Quote" + "Author" inputs
+        [+ Add Quote] button appends a new row
+        [×] button removes a row
+        Renders the founder_quotes array
+
+  - [Save Culture Profile] button (PUT — sends all fields)
+  - Toast: "Culture profile updated successfully."
+
+Note on founder_quotes:
+  This is sent as: [{ "quote": "...", "author": "..." }, ...]
+  The backend stores it as a JSONField.
+
+──────────────────────────────────────────────────────
+SCREEN 13: ADMIN — DAILY CONTENT  /admin/daily-content
+──────────────────────────────────────────────────────
+Data:
+  - GET /admin/daily-content/?content_type=&display_date=
+
+Layout:
+  - Page header: "Daily Content" + [+ Add Content] button
+  - Filter bar:
+      Content Type filter: All / Student Quote / Teacher Tip / Admin Insight
+      Date picker filter
+  - Content table:
+      Columns: Date, Type (badge), Body (truncated), Author, Actions
+      Actions: [Edit] (opens dialog), [Delete] (confirm dialog)
+
+  - Add/Edit dialog (DailyContent form):
+      Content Type (select: STUDENT_QUOTE / TEACHER_TIP / ADMIN_INSIGHT)
+      Display Date (date picker)
+      Body (textarea)
+      Author (text input)
+      NOTE: On edit, content_type and display_date are READ-ONLY (show as text).
+      Only body and author are editable in the dialog when editing.
+
+  - 409 Conflict handling:
+      If POST returns 409, show inline error in dialog:
+      "A [content_type] already exists for [date]. Edit the existing entry instead."
+
+──────────────────────────────────────────────────────
+SCREEN 14: ADMIN — USER MANAGEMENT  /admin/users
+──────────────────────────────────────────────────────
+Data:
+  - GET /admin/users/ (paginated + filtered)
+
+Layout:
+  - Page header: "User Management" + [+ Add User] + [Import Students] buttons
+  - Filter bar:
+      Role filter tabs: All | Students | Teachers | Admins
+      Active filter toggle: Active / Inactive / All
+      Search input (debounced 300ms)
+  - User table:
+      Columns: Name, Role (badge), Email/Username, Status, Date Joined, Actions
+      Actions per row: [View] [Edit] [Set Password] [Deactivate/Reactivate]
+
+  - For MAIN_ADMIN: shows all roles including SUB_ADMIN
+  - For SUB_ADMIN: same view but Edit/Password/Deactivate are disabled for admin rows
+
+  - [+ Add User] opens UserFormDialog:
+      Role select: Student / Teacher / Sub-Admin (Sub-Admin disabled if SUB_ADMIN)
+      Fields change by role:
+        Student: First Name, Last Name, Admission Number, Password
+        Teacher: First Name, Last Name, Email, Password
+        Sub-Admin: First Name, Last Name, Email, Password (MAIN_ADMIN only)
+
+  - [Set Password] opens a separate smaller dialog:
+      New Password + Confirm Password inputs
+
+  - Deactivation: ConfirmDialog → "This will prevent the user from logging in."
+
+──────────────────────────────────────────────────────
+SCREEN 15: ADMIN — BULK STUDENT IMPORT  /admin/users/import
+──────────────────────────────────────────────────────
+Data: POST /admin/users/bulk/
+
+Layout:
+  - Step 1: Upload or paste CSV
+      Option A: Download CSV template (generated client-side)
+        Columns: first_name, last_name, username (admission number), password
+      Option B: Paste CSV text into textarea
+      Option C: Drag & drop CSV file (react-dropzone)
+  - Step 2: Preview table of parsed rows
+      Editable — user can correct before submitting
+      Row count summary: "50 students ready to import"
+  - Step 3: Submit → POST /admin/users/bulk/
+  - Step 4: Results table (207 Multi-Status response):
+      Green rows: successfully created
+      Red rows: failed with error message
+      Summary: "48 imported, 2 failed"
+      [Download failure report] (generates CSV of failed rows)
+
+──────────────────────────────────────────────────────
+SCREEN 16: PLATFORM OWNER — SCHOOL MANAGEMENT  /platform/schools
+──────────────────────────────────────────────────────
+Data:
+  - GET /platform/schools/
+  - POST /platform/schools/
+  - PATCH /platform/schools/{id}/
+  - DELETE /platform/schools/{id}/
+
+Layout:
+  - Table of ALL schools:
+      Columns: Name, Slug, Active (toggle), Onboarding Date, Actions
+  - [+ Onboard School] button opens dialog:
+      Name, Slug (auto-generated from name, editable), Logo URL,
+      Address, Contact Email, Contact Phone
+  - Toggle is_active directly in the table row (PATCH with { is_active })
+  - [Edit] opens same dialog pre-filled
+  - [Delete] → ConfirmDialog (soft-delete — sets is_active=false)
+
+Slug generation helper:
+  name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-')
+
+──────────────────────────────────────────────────────
+SCREEN 17: PROFILE / SETTINGS  (accessible from all role dashboards)
+──────────────────────────────────────────────────────
+Data:
+  - GET  /auth/me/
+  - PATCH /auth/me/
+  - POST /auth/password/change/
+  - POST /auth/logout/
+
+Layout:
+  - Profile card: avatar (initials), name, role badge, email/username, school
+  - Edit name form (first_name, last_name)
+  - Change password form (old_password, new_password, confirm_password)
+  - [Logout] button — calls POST /auth/logout/, clears tokens, redirects to /
+
+
+================================================================================
+14. PHASE 2 — SCREEN-BY-SCREEN BREAKDOWN
+================================================================================
+
+──────────────────────────────────────────────────────
+SCREEN 1: NOTE LIST  /student/notes  (or /teacher/notes)
+──────────────────────────────────────────────────────
+Data: GET /notes/ (own notes, paginated)
+
+Layout:
+  - Page header: "My Notes" + [+ Upload Note] button
+  - Filter bar:
+      Status tabs: All | Processing | Ready | Failed
+      Subject filter (dropdown from unique subjects in current list)
+      Note type filter (All | PDF | Image | Voice | Text)
+      Search input
+  - Note cards grid (2 columns on tablet, 3 on desktop):
+      Each NoteCard:
+        File name (truncated), Note type icon, Subject/Topic
+        NoteStatusBadge (coloured badge)
+        Date uploaded
+        If AWAITING_STUDENT_APPROVAL: amber "Review Required" banner with [Review OCR] CTA
+        If FAILED: red "Processing Failed" banner
+
+  - Empty state: "No notes yet. Upload your first note!"
+  - Skeleton loading: 6 skeleton cards
+
+IMPORTANT UX:
+  - Notes in AWAITING_STUDENT_APPROVAL must be visually prominent — this is the
+    student's most important action state. Use an amber banner across the card top.
+  - Notes in PROCESSING states should show animated processing indicator.
+
+──────────────────────────────────────────────────────
+SCREEN 2: NOTE UPLOAD  /student/notes/upload
+──────────────────────────────────────────────────────
+Data: POST /notes/upload/ (multipart/form-data)
+
+Layout:
+  - Page header: "Upload Note"
+  - Step 1 — File Selection:
+      NoteUploadDropzone (react-dropzone):
+        Large dashed drop area
+        "Drag & drop your note here, or click to browse"
+        Accepted: PDF, Images (JPG/PNG/WEBP), Voice (MP3/WAV), Text files
+        Max 20MB per file
+        Shows file preview (name + size) after selection
+      Note Type select (auto-detected if possible from MIME type, but user can override):
+        PDF / Image / Voice / Typed Text
+      Subject field (text input with suggestions)
+      Topic field
+      Subtopic field
+
+  - [Upload Note] button:
+      Shows upload progress bar (axios onUploadProgress)
+      Disables button during upload
+      On success: redirect to /student/notes/{id}/status
+
+  - For bulk upload: toggle "Upload Multiple Files" expands to multi-file dropzone
+
+Zod validation:
+  - file: required
+  - note_type: required
+  - subject: optional (encourage but don't require)
+
+──────────────────────────────────────────────────────
+SCREEN 3: NOTE PROCESSING STATUS  /student/notes/[id]/status
+──────────────────────────────────────────────────────
+Data: GET /notes/{id}/status/  (polled every 3 seconds via useNotePoller)
+
+Purpose: Shown immediately after upload while OCR is running (PENDING_OCR).
+         Also shown during AI processing (PROCESSING_AI).
+
+Layout:
+  - Centred card layout
+  - Large animated icon (spinning, pulsing — note/document icon)
+  - Status-specific message:
+
+    PENDING_OCR:
+      "Extracting text from your note..."
+      Subtitle: "Our OCR engine is reading your handwriting. This takes 15-30 seconds."
+      Animated progress steps: [Uploaded ✓] [Extracting Text ●] [Review] [AI Summary]
+
+    PROCESSING_AI:
+      "Generating your AI summary..."
+      Subtitle: "Claude AI is analysing your notes and creating a personalised summary."
+      Animated progress steps: [Uploaded ✓] [OCR ✓] [Review ✓] [AI Summary ●]
+
+    FAILED:
+      Error icon (red)
+      "Processing failed"
+      Show error_message from API
+      [Try Again] button → triggers replace flow or re-upload
+
+  - Auto-redirect on state change:
+      PENDING_OCR → AWAITING_STUDENT_APPROVAL: redirect to /student/notes/{id}/review
+      PROCESSING_AI → READY:                  redirect to /student/notes/{id}
+      any → FAILED:                            stay on page, show error
+
+CRITICAL: useNotePoller hook must stop polling (return false) when status
+reaches AWAITING_STUDENT_APPROVAL, READY, or FAILED.
+
+──────────────────────────────────────────────────────
+SCREEN 4: OCR REVIEW  /student/notes/[id]/review
+──────────────────────────────────────────────────────
+Data:
+  - GET  /notes/{id}/          (fetch raw_ocr_text on load)
+  - POST /notes/{id}/confirm-ocr/  (on confirm)
+
+This is THE most critical UX screen in Phase 2.
+
+Purpose: The student reviews the extracted OCR text, corrects any errors (the OCR
+         engine is imperfect — handwriting misreads are common), then confirms.
+         Only AFTER confirmation does the AI summarization begin.
+
+Layout:
+  - Page header: "Review Your Note Text"
+  - Clear guidance banner (amber/info):
+      "Please review the extracted text below. Correct any errors, then click
+       Confirm to generate your AI summary. The more accurate this text, the
+       better your AI summary will be."
+
+  - Split view (desktop: side-by-side, mobile: tabs):
+      Left panel / Tab 1: Original file viewer
+        - If note_type = image/pdf: show <img> or <iframe> from file_url
+        - If note_type = voice: show <audio> player
+        - If note_type = text: show the raw uploaded text
+      Right panel / Tab 2: OCR Text Editor
+        - Large textarea with monospace font (JetBrains Mono)
+        - Pre-populated with raw_ocr_text from the API
+        - Character count / word count
+        - If OCR text is empty (voice note stub):
+            Show info banner: "Voice transcription is not yet available.
+            Please type or paste the content of your recording below."
+
+  - Below editor:
+      [← Back]  [Confirm & Generate Summary →]
+
+  - [Confirm] button:
+      Validates confirmed_text.length >= 10 (show inline error if less)
+      Calls POST /notes/{id}/confirm-ocr/ with { confirmed_text }
+      On success (202): redirect to /student/notes/{id}/status
+        (the status page will show PROCESSING_AI state)
+      Show loading state while submitting
+
+UX Notes:
+  - Auto-save the edited text to localStorage as a draft (keyed by note_id)
+    so students don't lose edits if they accidentally navigate away
+  - Warn before navigating away if edits exist (useBeforeUnload)
+  - The textarea must be large — this is a writing task, not a small input
+
+──────────────────────────────────────────────────────
+SCREEN 5: NOTE DETAIL  /student/notes/[id]
+──────────────────────────────────────────────────────
+Data: GET /notes/{id}/
+
+Purpose: View the complete note including AI-generated summary.
+Only fully populated when status = READY.
+
+Layout:
+  - Page header: "{file_name}" + NoteStatusBadge + [Actions dropdown]
+    Actions: [Replace File], [Edit Metadata], [Delete]
+  - Metadata row: Note type, Subject > Topic > Subtopic, Upload date, File size
+
+  - If status != READY: show appropriate message + status badge
+    (e.g. if still PROCESSING, link back to status page)
+
+  - READY state content (three-section AI output):
+
+    Section A — AI Summary Paragraph:
+      Subheading: "Summary"
+      Paragraph text from ai_summary_paragraph
+      [Copy] button (clipboard API)
+
+    Section B — Bullet Point Summary:
+      Subheading: "Key Points"
+      Bulleted list from ai_bullet_points[]
+      Each bullet on its own line
+
+    Section C — Key Learning Points:
+      Subheading: "Must Remember"
+      Highlighted card-style list from ai_key_points[]
+      Distinct visual treatment (e.g. highlighted boxes)
+
+    Section D — Original Note (collapsible accordion):
+      Subheading: "Original Extracted Text"
+      raw_ocr_text in monospace — read-only
+
+    Section E — Source File:
+      Link or embedded preview of original file_url
+
+  - [Replace File] → opens replace flow (PATCH /notes/{id}/replace/)
+  - [Edit Metadata] → inline edit form for subject/topic/subtopic
+  - [Delete] → ConfirmDialog → DELETE /notes/{id}/delete/
+
+──────────────────────────────────────────────────────
+SCREEN 6: SCHOOL NOTES BROWSER  /teacher/notes/school
+──────────────────────────────────────────────────────
+Data: GET /notes/school/ (paginated, teacher/admin only)
+
+Purpose: Teachers browse all student notes in the school to select notes for
+         conformity reports.
+
+Layout:
+  - Page header: "School Notes"
+  - Filter bar:
+      Search: student name or file name
+      Subject filter
+      Status filter (default: READY — only READY notes are useful for conformity)
+      Note type filter
+      Owner filter (dropdown: All Students / specific student name)
+  - Table view (better than cards for this use case):
+      Columns: Student Name, File Name, Subject / Topic, Type, Status, Date, Actions
+      Action per row: [View Note Detail] [Use for Conformity Report]
+  - Pagination controls
+
+UX Note: Default filter to status=READY — this is the most useful view for
+teachers looking for notes to compare. Allow them to override.
+
+──────────────────────────────────────────────────────
+SCREEN 7: CREATE CONFORMITY REPORT  /teacher/conformity/new
+──────────────────────────────────────────────────────
+Data:
+  - GET /notes/school/?status=READY  (fetch school notes to pick student note)
+  - GET /notes/?status=READY         (fetch own notes to pick teacher note)
+  - POST /notes/conformity/           (create report)
+
+This is a teacher-only screen.
+
+Layout:
+  - Page header: "Create Conformity Report"
+  - Step-based form (2 steps):
+
+    Step 1 — Select Student Note:
+      Searchable list/table of school notes with status=READY
+      Student name, subject, file name, date
+      [Select] button per row — highlights selected note
+      Selected: shows note card with student name + subject
+
+    Step 2 — Select Your Reference Note:
+      Searchable list of the TEACHER'S OWN notes with status=READY
+      File name, subject, date
+      [Select] button — highlights selected
+      NOTE: Both notes should ideally share the same subject — show warning if they don't
+
+  - Summary before submit:
+      "Comparing: [Student Name]'s '[note title]' against your '[teacher note title]'"
+  - [Generate Conformity Report] button → POST /notes/conformity/
+  - On success (202): redirect to /teacher/conformity/{id}/status
+
+Validation:
+  - Both notes must be selected before submitting
+  - Cannot select two notes from the same owner (will get 403/404 from API)
+
+──────────────────────────────────────────────────────
+SCREEN 8: CONFORMITY REPORT STATUS  /teacher/conformity/[id]/status
+──────────────────────────────────────────────────────
+Data: GET /notes/conformity/{id}/status/ (polled via useConformityPoller, 4s interval)
+
+Layout:
+  - Same pattern as Note Status screen
+  - AI is analysing message:
+      "Claude AI is comparing the two notes..."
+      "This analysis takes 20-40 seconds."
+  - Progress indicator:
+      [Notes Selected ✓] [Analysis Running ●] [Report Ready]
+
+  - On DONE: redirect to /teacher/conformity/{id}
+  - On FAILED: show error + [Try Again] (create a new report)
+
+──────────────────────────────────────────────────────
+SCREEN 9: CONFORMITY REPORT DETAIL  /teacher/conformity/[id]
+──────────────────────────────────────────────────────
+Data: GET /notes/conformity/{id}/
+
+Layout:
+  - Page header: "Conformity Report" + date badge
+
+  - Score section (prominent, top of page):
+      Large circular progress ring (ConformityScoreRing component)
+      Centre: "{conformity_percentage}%"
+      Below ring: score label:
+        90-100%: "Excellent Alignment" (green)
+        70-89%:  "Good Alignment"      (blue)
+        50-69%:  "Moderate Alignment"  (amber)
+        Below 50%: "Needs Attention"   (red)
+
+  - Notes compared:
+      Left card: Student note (student_name + subject + file_name)
+      Right card: Teacher reference note
+
+  - Analysis section:
+      Subheading: "Similarity Analysis"
+      similarity_analysis text (AI-generated paragraph)
+
+  - Action buttons:
+      [Download Report as PDF] (client-side PDF generation using browser print)
+      [Create Another Report]
+
+ConformityScoreRing implementation:
+  Use SVG or recharts RadialBarChart
+  Arc fills proportionally to conformity_percentage
+  Colour changes based on score range (green/blue/amber/red)
+
+──────────────────────────────────────────────────────
+SCREEN 10: CONFORMITY REPORT LIST  /teacher/conformity
+──────────────────────────────────────────────────────
+Data: GET /notes/conformity/
+
+Layout:
+  - Page header: "Conformity Reports" + [+ New Report] button
+  - Table:
+      Columns: Student, Subject, Score (% with colour coding), Status, Date, Actions
+      Actions: [View Report]
+  - Empty state: "No conformity reports yet. Select a student note to get started."
+
+
+================================================================================
+15. CRITICAL UX PATTERNS
+================================================================================
+
+PATTERN 1: ASYNC POLLING WITH VISUAL FEEDBACK
+───────────────────────────────────────────────
+Both the note pipeline and conformity analysis are async. Never make users
+feel "stuck" — always show:
+  1. A visual activity indicator (spinner, progress steps, animated icon)
+  2. Estimated time ("This takes 15-30 seconds")
+  3. What is happening ("Our OCR engine is reading your handwriting")
+  4. Automatic redirect when done (no manual refresh needed)
+
+Implement using useNotePoller / useConformityPoller hooks with refetchInterval.
+Stop polling in TERMINAL states. Redirect via router.push in a useEffect that
+watches the polled status.
+
+PATTERN 2: MULTI-STEP UPLOAD UX
+─────────────────────────────────
+  Upload → (OCR pipeline) → OCR Review → (AI pipeline) → Summary Ready
+
+The student MUST NOT be shown the AI summary before reviewing OCR.
+Each transition is a separate screen/route to maintain clear mental model.
+Use progress steps (breadcrumb-style) at the top of Note Processing and OCR
+Review screens so the student knows where they are in the pipeline.
+
+PATTERN 3: FILE UPLOAD PROGRESS
+─────────────────────────────────
+Always show an upload progress bar for file uploads.
+Use Axios onUploadProgress:
+
+  const response = await apiClient.post('/notes/upload/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (evt) => {
+      const percent = Math.round((evt.loaded * 100) / (evt.total ?? 1));
+      setUploadProgress(percent);
+    },
+  });
+
+Show a linear progress bar (shadcn Progress component) during upload.
+Disable the upload button and show "Uploading..." text while in progress.
+
+PATTERN 4: INLINE FORM VALIDATION
+───────────────────────────────────
+Use React Hook Form + Zod. Show errors inline under the relevant field,
+not in a summary toast. This matches the DRF error response structure
+where errors are field-keyed.
+
+Map DRF 400 validation errors to React Hook Form:
+  Object.entries(error.response.data).forEach(([field, messages]) => {
+    form.setError(field as any, { message: (messages as string[])[0] });
+  });
+
+PATTERN 5: TOAST NOTIFICATIONS
+────────────────────────────────
+Use Sonner (shadcn's recommended toast library).
+  - Success operations: brief green toast (3 seconds)
+  - Error operations: red toast with error detail (5 seconds, no auto-dismiss)
+  - Async operations (long): show progress toast while running, replace on complete
+
+Toast placement: bottom-right on desktop, bottom-centre on mobile.
+
+PATTERN 6: CONFIRM BEFORE DESTRUCTIVE ACTIONS
+───────────────────────────────────────────────
+Any DELETE or deactivation must show a ConfirmDialog (shadcn AlertDialog):
+  - Title: specific action ("Delete this note?")
+  - Description: consequence ("This cannot be undone. The file will be
+    permanently removed from storage.")
+  - Two buttons: [Cancel] (outline) + [Delete] (destructive red)
+
+Never delete on single click. Always require confirmation.
+
+PATTERN 7: EMPTY STATES
+────────────────────────
+Every list view needs an EmptyState component:
+  - Icon (relevant to the list type)
+  - Primary message ("No notes yet")
+  - Secondary message ("Upload your first note to get started")
+  - CTA button when appropriate ("Upload Note")
+
+This prevents confusing blank pages when lists are empty.
+
+PATTERN 8: OCR DRAFT SAVE
+──────────────────────────
+In the OCR Review screen, auto-save the text to localStorage every 10 seconds:
+  key:   `ocr_draft_${noteId}`
+  value: current textarea content
+
+On load, check localStorage for a saved draft and restore it.
+Clear the draft after successful confirmation.
+
+This prevents data loss if the browser crashes or the student accidentally
+navigates away while editing their OCR text.
+
+PATTERN 9: PAGINATION
+──────────────────────
+Use cursor-style page navigation (Previous / Next + current page / total pages).
+Read from PaginatedResponse: { count, next, previous, total_pages }.
+PaginationControls component should show:
+  "Showing {start}–{end} of {count} results"
+  [← Previous] [1 2 3 ... 10] [Next →]
+
+
+================================================================================
+16. ERROR HANDLING STRATEGY
+================================================================================
+
+GLOBAL AXIOS ERROR HANDLING
+─────────────────────────────
+All API errors follow the RFC 7807 format:
+  { error_code, detail, status_code, timestamp }
+
+Or DRF validation errors:
+  { field_name: ["message"], non_field_errors: ["message"] }
+
+Create a helper to extract a user-friendly message:
+
+  export function getErrorMessage(error: unknown): string {
+    if (axios.isAxiosError(error)) {
+      const data = error.response?.data;
+      if (data?.detail)      return data.detail;
+      if (data?.non_field_errors) return data.non_field_errors[0];
+      // Fallback for DRF validation errors
+      const firstField = Object.values(data ?? {})[0];
+      if (Array.isArray(firstField)) return firstField[0];
+    }
+    return 'An unexpected error occurred. Please try again.';
+  }
+
+HTTP STATUS HANDLING MATRIX
+─────────────────────────────
+  400 Bad Request    → Show field-level validation errors inline in the form
+  401 Unauthorized   → Trigger token refresh (handled in interceptor)
+                       If refresh also fails → clear tokens → redirect to /
+  403 Forbidden      → Toast: "You don't have permission to do this."
+  404 Not Found      → Navigate to a 404 page or show EmptyState in place
+  409 Conflict       → Show inline error in the relevant form (e.g. duplicate entry)
+  429 Too Many Req.  → Toast: "Too many attempts. Please wait a minute and try again."
+  500 Server Error   → Toast: "Server error. Our team has been notified."
+                       Log to Sentry (recommended in production)
+
+NETWORK ERRORS
+───────────────
+  if (error.code === 'ECONNABORTED') → "Request timed out. Check your connection."
+  if (!error.response) → "Cannot reach the server. Check your internet connection."
+
+FORM-LEVEL VS TOAST-LEVEL ERRORS
+──────────────────────────────────
+  Form validation errors (400):  Inline under each field
+  Auth errors (401/403):          Toast notification
+  Not found (404):                In-page error state (not a toast)
+  Server errors (5xx):            Toast notification + optional retry button
+  Conflicts (409):                Inline in the form or above the form
+
+
+================================================================================
+17. RESPONSIVE DESIGN & ACCESSIBILITY
+================================================================================
+
+RESPONSIVE STRATEGY
+─────────────────────
+  Mobile (< 768px):
+    - Sidebar replaced with bottom navigation bar (4 tabs max)
+    - Tables scroll horizontally or convert to card-stack layout
+    - Upload dropzone is smaller, tap-friendly
+    - OCR Review: tabbed layout (Original | Review Text)
+    - All modals are full-screen bottom sheets (shadcn Drawer)
+
+  Tablet (768px - 1024px):
+    - Collapsible sidebar (hamburger menu → overlay drawer)
+    - 2-column grid layouts
+    - Standard dialog modals
+
+  Desktop (> 1024px):
+    - Fixed sidebar (always visible)
+    - 3-column grids where applicable
+    - Side-by-side layouts (e.g. OCR Review split view)
+
+SIDEBAR NAVIGATION ITEMS BY ROLE
+──────────────────────────────────
+  STUDENT:   Dashboard, My Notes, Profile
+  TEACHER:   Dashboard, My Notes, School Notes, Conformity Reports, Profile
+  ADMIN:     Dashboard, School Info, School Culture, Daily Content, Users, Profile
+  VISITOR:   Dashboard, My Notes, Profile
+  PLATFORM:  Dashboard, Schools
+
+ACCESSIBILITY REQUIREMENTS
+────────────────────────────
+  - All interactive elements must be keyboard-navigable (Tab + Enter/Space)
+  - All images must have alt text
+  - Form inputs must have associated <label> elements (shadcn Form handles this)
+  - NoteStatusBadge must not rely on colour alone — include text
+  - ConformityScoreRing must have aria-label with the percentage value
+  - Loading states must use aria-live="polite" or role="status" for screen readers
+  - Focus management: when a dialog opens, focus moves to the first focusable element
+  - Colour contrast: maintain WCAG AA (4.5:1) for all text
+
+
+================================================================================
+18. TESTING STRATEGY
+================================================================================
+
+UNIT TESTS (Vitest + Testing Library)
+──────────────────────────────────────
+  - All Zod schemas: test valid and invalid inputs
+  - API helper functions: test request construction
+  - Token decode/encode helpers
+  - getErrorMessage utility function
+  - Status badge colour mapping functions
+
+COMPONENT TESTS (Testing Library + MSW)
+────────────────────────────────────────
+  - LoginForm: submit with valid data, show error on 401
+  - NoteUploadDropzone: accept valid files, reject oversized files
+  - OCRReviewEditor: shows raw_ocr_text, validates min length before confirm
+  - UserFormDialog: role-based field rendering (student vs teacher vs admin)
+  - ConformityScoreRing: renders correct colour for each score range
+  - PaginationControls: previous/next buttons disabled at edges
+
+MSW SETUP (mock all API calls in tests)
+─────────────────────────────────────────
+Create handlers in src/mocks/handlers.ts:
+  - POST /auth/login/         → { access: '...', refresh: '...' }
+  - GET  /schools/active/     → { results: [...mockSchools] }
+  - GET  /notes/              → { results: [...mockNotes] }
+  - GET  /notes/:id/status/   → cycle through statuses for testing
+
+E2E TESTS (Playwright — recommended for Phase 2+)
+──────────────────────────────────────────────────
+  Critical paths to cover:
+    - Full school login flow (school selection → login → dashboard)
+    - Visitor registration → email verification → dashboard
+    - Note upload → OCR review → AI summary
+    - Admin: create user, create daily content, update school info
+
+
+================================================================================
+APPENDIX A: API FUNCTION SIGNATURES (src/lib/api/)
+================================================================================
+
+auth.ts:
+  login(payload: LoginPayload): Promise<TokenPair>
+  refreshToken(refresh: string): Promise<{ access: string }>
+  registerVisitor(payload: VisitorRegisterPayload): Promise<{ detail: string }>
+  verifyEmail(token: string): Promise<TokenPair & { detail: string }>
+  resendVerification(email: string): Promise<{ detail: string }>
+  logout(refresh: string): Promise<void>
+  getMe(): Promise<UserProfile>
+  updateMe(payload: Partial<UserProfile>): Promise<UserProfile>
+  changePassword(payload: ChangePasswordPayload): Promise<void>
+  requestPasswordReset(email: string): Promise<{ detail: string }>
+  confirmPasswordReset(payload: PasswordResetPayload): Promise<void>
+
+schools.ts:
+  getActiveSchools(page?: number): Promise<PaginatedResponse<SchoolPublic>>
+  getSchoolDetail(id: string): Promise<SchoolDetail>
+  getSchoolCulture(id: string): Promise<SchoolCulture>
+
+admin.ts:
+  getAdminSchool(): Promise<SchoolAdmin>
+  updateAdminSchool(payload: Partial<SchoolAdmin>): Promise<SchoolAdmin>
+  getAdminCulture(): Promise<SchoolCulture>
+  updateAdminCulture(payload: SchoolCulturePayload): Promise<SchoolCulture>
+  getDailyContent(filters?: DailyContentFilters): Promise<DailyContent[]>
+  createDailyContent(payload: DailyContentPayload): Promise<DailyContent>
+  updateDailyContent(id: string, payload: Partial<DailyContentPayload>): Promise<DailyContent>
+  deleteDailyContent(id: string): Promise<void>
+  getUsers(filters?: UserFilters): Promise<PaginatedResponse<UserListItem>>
+  createUser(payload: CreateUserPayload): Promise<UserDetail>
+  bulkCreateStudents(payload: BulkCreatePayload): Promise<BulkCreateResult>
+  getUserDetail(id: string): Promise<UserDetail>
+  updateUser(id: string, payload: UpdateUserPayload): Promise<UserDetail>
+  deactivateUser(id: string): Promise<void>
+  setUserPassword(id: string, payload: SetPasswordPayload): Promise<void>
+
+notes.ts:
+  uploadNote(formData: FormData, onProgress?: (pct: number) => void): Promise<UploadResponse>
+  bulkUploadNotes(formData: FormData): Promise<BulkUploadResponse>
+  getNotes(filters?: NoteFilters): Promise<PaginatedResponse<NoteListItem>>
+  getSchoolNotes(filters?: SchoolNoteFilters): Promise<PaginatedResponse<SchoolNoteListItem>>
+  getNoteDetail(id: string): Promise<NoteDetail>
+  getNoteStatus(id: string): Promise<NoteStatusPoll>
+  confirmOCR(id: string, confirmedText: string): Promise<ConfirmResponse>
+  replaceNote(id: string, formData: FormData): Promise<UploadResponse>
+  updateNoteMetadata(id: string, payload: NoteMetadataPayload): Promise<NoteListItem>
+  deleteNote(id: string): Promise<void>
+  getConformityReports(filters?: object): Promise<PaginatedResponse<ConformityReport>>
+  createConformityReport(payload: ConformityCreatePayload): Promise<ConformityCreateResponse>
+  getConformityReport(id: string): Promise<ConformityReport>
+  getConformityStatus(id: string): Promise<ConformityStatusPoll>
+
+platform.ts:
+  getPlatformSchools(): Promise<SchoolAdmin[]>
+  createSchool(payload: CreateSchoolPayload): Promise<SchoolAdmin>
+  updateSchool(id: string, payload: Partial<CreateSchoolPayload>): Promise<SchoolAdmin>
+  deleteSchool(id: string): Promise<void>
+
+
+================================================================================
+APPENDIX B: ENVIRONMENT CHECKLIST BEFORE FIRST RUN
+================================================================================
+
+Backend must be running at NEXT_PUBLIC_API_BASE_URL with:
+  [ ] python manage.py migrate (all migrations applied)
+  [ ] python manage.py createsuperuser (platform owner account)
+  [ ] At least one school onboarded via /api/v1/platform/schools/
+  [ ] At least one MAIN_ADMIN user created in that school
+
+Frontend:
+  [ ] .env.local created with NEXT_PUBLIC_API_BASE_URL set
+  [ ] npm install completed
+  [ ] npx shadcn@latest init completed (tailwind configured)
+  [ ] All shadcn components installed
+  [ ] npm run gen:types run (TypeScript types from schema.yaml)
+  [ ] npm run dev → app loads at localhost:3000
+
+
+================================================================================
+APPENDIX C: KNOWN BACKEND BEHAVIOURS & GOTCHAS
+================================================================================
+
+1. STUDENT AUTH: Students use 'username' (admission number), NOT email.
+   The login form MUST change the identifier label to "Admission Number" for
+   the Student tab. The API field is called "identifier" in both cases.
+
+2. VISITOR SCHOOL_ID: Visitors have school_id = null in their JWT.
+   All school-scoped API calls will fail for visitors.
+   The visitor flow MUST NOT show any school-specific endpoints.
+
+3. PUT vs PATCH for culture:
+   The /admin/culture/ endpoint uses PUT (full upsert), not PATCH.
+   Always send ALL culture fields — even empty strings. Do not send partial data.
+
+4. DAILY CONTENT PATCH restriction:
+   PATCH /admin/daily-content/{id}/ ONLY accepts 'body' and 'author'.
+   Do NOT include content_type or display_date in PATCH requests — they are
+   ignored. Show them as read-only in the edit form.
+
+5. 409 CONFLICT on daily content creation:
+   Each school can only have ONE entry per content_type per display_date.
+   Show an inline error in the creation form, not a generic toast.
+
+6. BULK CREATE response code:
+   201 = all created successfully
+   207 = partial success (some failed) — BOTH codes return the same response shape.
+   Always check the 'failed' array in the response, regardless of status code.
+
+7. NOTE STATUS after text upload:
+   Text notes (note_type = 'text') skip OCR and immediately enter
+   AWAITING_STUDENT_APPROVAL status. The upload response will show this status.
+   Route directly to the OCR review screen (which shows the typed text for
+   confirmation), not the processing status screen.
+
+8. CONFORMITY report school scope:
+   student_note_id must point to a note that is in the SAME school as the teacher.
+   The backend enforces this via TenantManager. If you pass a note_id from
+   another school, you'll get 404 NOT_FOUND (not 403 — this is by design to
+   prevent enumeration).
+
+9. VOICE NOTE OCR:
+   Voice note OCR returns empty string (speech-to-text is Phase 3+).
+   The OCR review screen MUST show a helpful message for voice notes:
+   "Voice transcription is coming soon. Please manually type the content of
+   your recording in the text area below."
+   The confirm button should still work — the student types the content manually.
+
+10. TOKEN REFRESH RACE CONDITION:
+    Multiple simultaneous 401 responses must not trigger multiple refresh calls.
+    The apiClient interceptor uses a queue pattern (failedQueue) to handle this.
+    Ensure this logic is preserved exactly as written.
+
+11. PASSWORD VALIDATION:
+    The backend enforces Django's password validators:
+    - Minimum 8 characters
+    - Not entirely numeric
+    - Not too similar to username/email
+    Show these as inline form errors, not toasts.
+
+12. ADMIN creating users:
+    MAIN_ADMIN can create: STUDENT, TEACHER, SUB_ADMIN
+    SUB_ADMIN can create:  STUDENT, TEACHER (NOT SUB_ADMIN)
+    Hide the "Sub-Admin" role option in the create user form for SUB_ADMIN users.
+    Read the current user's role from useAuthStore().role.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

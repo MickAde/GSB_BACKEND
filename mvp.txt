@@ -1,0 +1,43 @@
+Genius Study Buddy (GSB) MVP Development Proposal & Service
+Agreement. Prepared By: Adegboye A. Michael
+Date: June 1, 2026
+1. Project Understanding
+This proposal covers the frontend and backend architecture, development, integration, testing, and deployment support for the Genius Study Buddy (GSB) MVP as defined in the
+provided MVP specification document. 2. Scope of Work
+The engagement is limited to the MVP requirements including: Multi-tenant architecture, role-based access control, authentication systems, OCR pipeline, AI summarization, quiz
+engine, teacher workflows, admin workflows, calendar integration, analytics foundations, and supporting backend infrastructure. 3. Project Phases & Pricing
+Phase Deliverables Duration Cost (NGN)
+Phase 1 Architecture, Multi- tenancy, Authentication, RBAC, School
+Management
+4 Days ₦200,000
+Phase 2 OCR Pipeline, File
+Uploads, AI Note
+Processing, Summaries
+2-3 Days ₦100,000
+Phase 3 Quiz Engine, Exam
+Practice, Math
+Engine Integration, Analytics
+Foundation
+3-5 Days ₦150,000
+Phase 4 Teacher Workflows, Admin Workflows, Approval System, Calendar
+Integration
+1 Week ₦150,000
+Total MVP Development Cost: ₦600,000
+4. Payment Structure
+• 30% Project Commencement • 25% After Phase 2 Completion
+• 25% After Phase 3 Completion
+• 20% Upon Final Delivery
+5. Timeline
+Estimated delivery timeline: 2 - 3 weeks depending on review cycles, feedback, availability
+of content, AI provider access, and third-party service setup. 6. Change Management
+Features not included in the approved MVP scope will be treated as Phase 2 or future
+enhancements. Any additional requirements will require separate estimation, approval, and
+costing. 7. Hosting & Third-Party Costs
+The client is responsible for hosting, cloud infrastructure, domain names, email services, AI
+API subscriptions, OCR services, storage services, and any third-party platform costs. 8. Maintenance & Support
+The proposal includes 90 days of post-launch support for bug fixes related to the delivered
+MVP scope. New features and major enhancements are excluded. 9. Assumptions
+This estimate assumes a single MVP release, reasonable client 
+
+feedback timelines, and no
+major scope changes during development.

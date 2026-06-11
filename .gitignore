@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+.venv/
+ENV/
+
+# Django
+*.log
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+static_root/
+
+# Environment Variables
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# Docker
+.dockerignore
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Coverage / Testing
+.coverage
+htmlcov/
+.pytest_cache/
+coverage.xml
+*.cover
+
+# Migrations (optional - uncomment if you don't want to track migrations)
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Node (if any frontend tooling is added)
+node_modules/
+npm-debug.log*
+yarn-error.log*

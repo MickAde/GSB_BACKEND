@@ -1,0 +1,628 @@
+AI Study Buddy Platform
+Detailed Product Requirements Document (PRD) For Development
+Project Overview
+The platform is a cloud based AI powered educational ecosystem for schools.
+The platform will have five major user roles:
+1.Students
+2.Teachers
+3.Main Admins
+4.Sub Admins
+5.Optional Parent Access
+The platform is primarily web based for the first version.
+The platform must be responsive across:
+desktop
+tablet
+mobile browser
+The system should use role based authentication and multi tenant architecture.
+Each school operates independently inside the same platform.
+One school must NEVER access another school’s data.
+
+PLATFORM ENTRY FLOW AND USER NAVIGATION
+HOME PAGE FLOW
+When users open the platform, the homepage should present two primary entry options:
+1.Enter as Visitor
+2.Enter Through School
+This structure is very important and should guide the entire authentication architecture.
+
+VISITOR FLOW
+If user selects:
+Enter as Visitor
+Flow should be:
+1.Visitor Registration Page
+2.Email Verification
+3.Visitor Dashboard Access
+Visitor requirements:
+registration requires email
+email verification mandatory
+one week free trial access
+limited feature access only
+subscription required after free trial expires
+Visitor role is a FULL platform role and must be treated separately from school users.
+Visitor users are independent users and are not attached to any school.
+
+SCHOOL FLOW
+If user selects:
+Enter Through School
+Flow should be:
+1.School Selection Page
+2.Role Selection Page
+3.Login Page
+4.Dashboard Access
+
+SCHOOL SELECTION PAGE
+The school selection page should include:
+search bar for schools
+grid/list view of onboarded schools
+school logo support
+clickable school cards
+Only schools onboarded manually by platform owners should appear.
+Schools are NOT self onboarding.
+Platform owners manually onboard schools into the system.
+
+ROLE SELECTION PAGE
+After school selection, users should see:
+Proceed As:
+Student
+Teacher
+Admin
+System then routes users to the appropriate login system.
+
+STUDENT LOGIN FLOW
+Students should NOT use emails.
+Student login should use:
+student username/admission number/student ID
+password
+Platform owners initially generate credentials based on information submitted by the school.
+Students can later:
+change password
+reset password through approved recovery methods
+
+TEACHER LOGIN FLOW
+Teachers should use:
+email
+password
+Teachers can:
+change password
+reset password
+
+ADMIN LOGIN FLOW
+Admins should use:
+email
+password
+Admin system determines:
+Main Admin
+OR
+Sub Admin
+based on permissions assigned in backend.
+
+USER ROLE STRUCTURE
+The platform contains the following user roles:
+1.Visitor
+2.Student
+3.Teacher
+4.Main Admin
+5.Sub Admin
+6.Optional Parent Access
+
+GENERAL SYSTEM REQUIREMENTS
+Authentication System
+Authentication must follow the exact platform entry flow defined above.
+School accounts are NOT publicly self created.
+Platform owners manually onboard schools.
+During onboarding:
+school data is uploaded
+student accounts are generated
+teacher accounts are generated
+admin accounts are generated
+Credential structure:
+Students:
+username/admission number/student ID
+password only
+no email required
+Teachers:
+email
+password
+Admins:
+email
+password
+Visitors:
+email authentication mandatory
+one week free access before subscription
+MULTI TENANT SYSTEM REQUIREMENT
+The platform must support multiple schools.
+Each school must have:
+separate database scope
+separate students
+separate teachers
+separate admins
+separate reports
+separate analytics
+No school should see another school’s information.
+
+STUDENT PLATFORM REQUIREMENTS
+STUDENT DASHBOARD
+When students log in, dashboard should display:
+welcome message
+daily student quote
+performance overview
+recent quiz performance
+readiness score
+leaderboard preview
+subjects overview
+upcoming events/exams
+study group updates
+
+DAILY STUDENT QUOTE SYSTEM
+All students across the platform receive the SAME student quote daily.
+Student quotes focus on:
+discipline
+learning
+excellence
+creativity
+hard work
+consistency
+Admins can upload school values and philosophy.
+The system should intelligently blend:
+platform quotes
+school philosophy
+school core values
+founder’s quotes
+into student quote generation.
+
+STUDENT SUBJECT STRUCTURE
+Students organize materials using:
+Subject → Topic → Subtopic
+Examples:
+Mathematics → Algebra → Simultaneous Equations
+Biology → Nutrition → Balanced Diet
+System should preload common subjects.
+
+NOTE UPLOAD SYSTEM
+Students can upload:
+handwritten notes
+typed notes
+PDFs
+images
+voice notes
+multiple files simultaneously
+Supported upload actions:
+upload single file
+upload multiple files
+replace upload
+delete upload
+
+OCR TRANSCRIPTION SYSTEM
+Handwritten notes should:
+convert to editable text
+preserve original meaning
+avoid AI interpretation during transcription
+IMPORTANT:
+The transcription section should ONLY contain raw extracted text.
+No summaries should appear inside transcription.
+
+TRANSCRIPTION REVIEW SCREEN
+After OCR:
+show editable text
+provide audio read aloud button
+allow students correct errors
+allow save changes
+allow cancel
+allow final confirmation
+Only after confirmation should AI proceed to summary generation.
+
+AI SUMMARY SYSTEM
+After confirmation:
+AI generates:
+1.One paragraph summary
+2.Bullet point summary
+3.Key learning points
+Original notes must remain accessible separately.
+
+QUIZ SYSTEM
+Students can generate quizzes from:
+personal uploaded notes
+teacher uploaded materials
+historical exam database
+
+QUIZ SETTINGS
+Students should be able to customize:
+number of questions
+difficulty level
+timer
+quiz mode
+Difficulty levels:
+Easy
+Moderate
+Difficult
+Question count:
+minimum configurable
+maximum configurable
+
+THREE LEVEL QUIZ STRUCTURE
+LEVEL 1
+Questions generated directly from uploaded notes.
+
+LEVEL 2
+Historical exam questions related to uploaded topics.
+Examples:
+Common Entrance
+Junior WAEC
+WAEC
+JAMB
+IGCSE
+Questions must align with:
+student class
+curriculum level
+topic selected
+
+LEVEL 3
+Full timed examination simulation.
+Features:
+countdown timer
+automatic submission
+instant grading
+score breakdown
+corrections/explanations
+
+EXAM PRACTICE MODULE
+Separate sidebar menu called:
+“Exam Practice”
+Students can independently practice:
+WAEC
+JAMB
+Common Entrance
+Junior WAEC
+IGCSE
+other configured exams
+Features:
+timed exams
+instant results
+explanations
+readiness calculation
+
+QUIZ EXPERIENCE FEATURES
+Each question may include:
+image support
+diagrams
+visual references
+System should include:
+correct answer sound
+wrong answer sound
+
+MATHEMATICS ENGINE REQUIREMENT
+AI alone should NOT handle sensitive calculations.
+Platform should integrate:
+symbolic math engine
+accurate calculation engine
+Needed for:
+mathematics
+physics
+chemistry calculations
+
+PERFORMANCE TRACKING
+Students should see:
+total accuracy percentage
+subject performance
+topic mastery
+improvement trends
+quiz history
+readiness score
+study streaks
+
+READINESS SCORE SYSTEM
+AI calculates readiness using:
+quiz scores
+exam simulations
+speed
+consistency
+topic coverage
+historical performance
+
+LEADERBOARD SYSTEM
+Weekly leaderboard should show:
+top 3 students
+highest accuracy
+Leaderboards can exist by:
+class
+subject
+school
+
+STUDY GROUP SYSTEM
+Students should be able to:
+create groups
+remove/delete groups
+join groups
+leave groups
+invite members
+remove members
+assign group leaders
+rename groups
+Group features:
+group goals
+group streaks
+mini challenges
+shared study targets
+scheduled study sessions
+calendar integration
+IMPORTANT:
+No unrestricted social chatting.
+Group interaction should remain education focused.
+
+NOTE CONFORMITY SYSTEM
+AI compares:
+teacher uploaded notes
+WITH
+student uploaded notes
+Then generates:
+conformity percentage
+similarity analysis
+Purpose:
+Measure how closely student notes align with what teacher taught.
+
+TEACHER OF THE MONTH VOTING SYSTEM
+Students receive prompts asking them to vote.
+Requirements:
+searchable teacher dropdown
+one vote per student
+reminder prompts
+voting prompt before/after quizzes
+Teacher score calculation:
+50% student votes
+40% AI teaching/activity score
+10% admin contribution
+
+TEACHER PLATFORM REQUIREMENTS
+TEACHER DASHBOARD
+Dashboard should display:
+welcome message
+daily teacher tip
+class analytics
+flagged students
+uploaded resources
+lesson plan activity
+approval requests
+
+DAILY TEACHER TIP SYSTEM
+All teachers receive the SAME daily teacher tip.
+Tips focus on:
+teaching effectiveness
+classroom management
+student psychology
+pedagogy
+communication
+System should blend:
+platform teaching tips
+school philosophy
+institutional values
+
+STUDENT MONITORING SYSTEM
+Teachers should see:
+student accuracy trends
+quiz performance
+participation
+readiness scores
+weak areas
+growth trends
+
+ALERT SYSTEM
+Teachers can:
+set class wide thresholds
+set individual student thresholds
+Examples:
+minimum accuracy
+quiz participation frequency
+consistency level
+When student falls below threshold:
+teacher receives alert
+student appears in flagged section
+
+AI QUESTION GENERATOR
+Teachers can:
+generate AI questions
+manually create questions
+edit AI generated questions
+categorize questions by difficulty
+
+LESSON PLAN MODULE
+Teachers can:
+create lesson plans
+edit lesson plans
+upload lesson notes
+download lesson plans
+print lesson plans
+AI assists with:
+structure suggestions
+teaching improvements
+updated information
+Teacher remains final authority.
+
+LESSON PLAN REVIEW WORKFLOW
+Workflow:
+1.Teacher submits lesson plan
+2.Admin reviews
+3.Admin comments if needed
+4.Teacher revises
+5.Admin approves
+6.Approved version becomes downloadable/printable
+
+TEACHER TRAINING SYSTEM
+Teachers receive:
+daily micro teaching tips
+instructional reminders
+classroom improvement suggestions
+
+VIDEO LESSON SYSTEM
+Teachers can upload teaching videos.
+Requirements:
+one video per topic
+AI quality analysis
+teaching effectiveness rating
+optional monetization/incentive structure
+
+TEACHER RESOURCE LIBRARY
+Teachers can upload/share:
+worksheets
+slides
+PDFs
+educational resources
+multimedia materials
+
+COLLABORATIVE LESSON PLANNING
+Teachers can:
+collaborate on plans
+review shared drafts
+comment
+align teaching structures
+
+ADMIN PLATFORM REQUIREMENTS
+ADMIN DASHBOARD
+Dashboard should show:
+school analytics
+teacher activity
+student engagement
+top classes
+platform usage
+flagged trends
+approval requests
+
+DAILY ADMIN INSIGHT SYSTEM
+All admins receive the SAME daily leadership insight.
+Focus areas:
+leadership
+systems thinking
+accountability
+excellence
+school culture
+Should blend:
+platform leadership insights
+school philosophy
+founder values
+
+SUB ADMIN MANAGEMENT
+Main admins can:
+create sub admins
+delete sub admins
+edit permissions
+assign scopes
+Sub admins only access assigned sections.
+
+SCHOOL CULTURE MANAGEMENT
+Admins should be able to upload:
+school philosophy
+founder quotes
+mission statement
+vision statement
+school creed
+core values
+institutional principles
+These should feed into:
+student quotes
+teacher tips
+admin leadership insights
+
+PARENT MANAGEMENT SYSTEM
+Admins can:
+map parents to students
+upload parent contacts
+edit parent contacts
+remove parent contacts
+
+PREMIUM PARENT REPORT SYSTEM
+Premium feature only.
+Admins can activate:
+weekly parent reports
+monthly parent reports
+Reports may include:
+performance summaries
+strengths
+weaknesses
+quiz trends
+readiness levels
+consistency
+
+SCHOOL CALENDAR SYSTEM
+Admins can create:
+exam schedules
+school events
+meetings
+reminders
+deadlines
+Calendar should sync across:
+students
+teachers
+admins
+
+ANALYTICS REQUIREMENTS
+Admins should see:
+school wide performance
+class trends
+teacher engagement
+usage statistics
+leaderboard analytics
+Teachers should see:
+individual student analytics
+class analytics
+Students should see:
+personal analytics only
+
+GAMIFICATION REQUIREMENTS
+Platform should support:
+badges
+streaks
+achievements
+leaderboards
+recognition systems
+Gamification should remain balanced and not distracting.
+
+SECURITY REQUIREMENTS
+System should implement:
+encrypted passwords
+secure authentication
+role based access
+secure APIs
+database isolation
+activity logging
+backup systems
+
+AI INFRASTRUCTURE REQUIREMENTS
+Platform will rely on:
+AI APIs
+OCR engines
+summarization models
+recommendation systems
+math engines
+AI functions include:
+summaries
+quizzes
+recommendations
+analytics
+note conformity
+readiness scoring
+
+INITIAL DEPLOYMENT REQUIREMENT
+First version should be:
+responsive web application
+mobile browser friendly
+scalable SaaS architecture
+Future versions may include:
+Android app
+iOS app
+Progressive Web App
+
+IMPORTANT DEVELOPMENT NOTES
+The platform should feel:
+modern
+clean
+premium
+educational
+structured
+highly intuitive
+Focus heavily on:
+dashboard usability
+performance speed
+AI response speed
+clean navigation
+accessibility
+scalability
+The system is NOT just a quiz app.
+It is a full educational intelligence ecosystem for schools.

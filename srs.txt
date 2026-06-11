@@ -1,0 +1,245 @@
+COMPLETE SOFTWARE REQUIREMENTS SPECIFICATION (SRS)
+Enterprise Backend Architecture & Technical Blueprint
+Project: Genius Study Buddy (GSB) Minimum Viable Product (v1.0)
+Classification: STRICTLY CONFIDENTIAL - Board of Directors & Technical Leadership Review
+Prepared By: Chief Technology Officer (CTO) / Lead Systems Architect
+Date: June 8, 2026
+
+TABLE OF CONTENTS
+Executive Summary & Architectural Philosophy
+
+Infrastructure Topology & Environment
+
+Database Architecture & Schema Definitions
+
+Multi-Tenant Security Protocol (RLS)
+
+Identity & Access Management (IAM)
+
+Comprehensive API Specification
+
+Asynchronous Task Architecture (AI & OCR)
+
+Security, Error Handling & Logging Protocols
+
+Deployment & CI/CD Strategy
+
+1. EXECUTIVE SUMMARY & ARCHITECTURAL PHILOSOPHY
+This document serves as the exhaustive engineering contract for the Genius Study Buddy (GSB) MVP backend. The system is designed as a high-availability, multi-tenant SaaS application operating on a strict "Zero Trust" data isolation model.
+
+To meet the aggressive 3-week delivery timeline without accruing technical debt, the architecture relies on PostgreSQL Row-Level Security (RLS) to enforce tenant boundaries at the database kernel, completely bypassing application-layer vulnerabilities. The application leverages a containerized Django 5.x (Python 3.14) RESTful backend, utilizing an asynchronous event-driven architecture via Celery and Redis to handle heavy AI and OCR workloads without degrading API response times.
+
+2. INFRASTRUCTURE TOPOLOGY & ENVIRONMENT
+The system utilizes a lightweight, containerized micro-service architecture for local development, which mirrors the cloud-native production environment identically.
+
+API Gateway / Reverse Proxy: NGINX (handles SSL termination, rate-limiting, and payload size restrictions).
+
+Application Server: Gunicorn (WSGI) managing Django 5.x instances.
+
+Runtime Engine: Docker Engine utilizing python:3.14-slim-bookworm (Debian 12 base).
+
+Primary Datastore: Supabase Hosted PostgreSQL 16+ (EU/US Region).
+
+Connection Protocol: IPv4 Direct Connection (Port 5432) to ensure Django's SET LOCAL session variables persist securely throughout the HTTP transaction lifecycle.
+
+In-Memory Datastore / Message Broker: Redis 7.x (Facilitates Celery task queues and API caching).
+
+Storage Infrastructure: Amazon S3 / Cloudflare R2 (Strictly for immutable blob storage: PDFs, JPEGs).
+
+3. DATABASE ARCHITECTURE & SCHEMA DEFINITIONS
+The database follows a "Shared Database, Shared Schema" multi-tenancy model. All models (except the globally scoped School and Visitor specific tables) inherit from an abstract TenantBoundModel.
+
+3.1 Core Entity-Relationship Models
+Table: users_user (Custom Identity Model)
+
+id: UUID (Primary Key, Default: gen_random_uuid())
+
+school_id: UUID (Foreign Key -> schools.id, Nullable, Indexed)
+
+role: VARCHAR(20) (Enum: STUDENT, TEACHER, SUB_ADMIN, MAIN_ADMIN, VISITOR)
+
+username: VARCHAR(150) (Indexed, Nullable, maps to Student Admission Number)
+
+email: VARCHAR(254) (Unique, Indexed, Nullable, mandatory for non-students)
+
+password: VARCHAR(128) (Argon2id hashed)
+
+is_active: BOOLEAN (Default: True. Enforces soft-deletion)
+
+Table: schools_school (Global Tenant Registry)
+
+id: UUID (Primary Key)
+
+name: VARCHAR(255)
+
+onboarding_date: TIMESTAMPTZ
+
+is_active: BOOLEAN (If False, all RLS policies deny access to this tenant globally)
+
+Table: notes_upload (AI Pipeline Anchor)
+
+id: UUID (Primary Key)
+
+owner_id: UUID (Foreign Key -> users_user.id)
+
+school_id: UUID (Foreign Key -> schools_school.id)
+
+file_url: VARCHAR(1024) (S3 URI)
+
+raw_ocr_text: TEXT (Populated post-Tesseract processing)
+
+ai_summary: TEXT (Populated post-Claude processing)
+
+status: VARCHAR(30) (Enum: PENDING_OCR, AWAITING_STUDENT_APPROVAL, PROCESSING_AI, READY)
+
+4. MULTI-TENANT SECURITY PROTOCOL (RLS SPECIFICATION)
+The directive “One school must NEVER access another school’s data” is enforced mathematically via SQL context injection.
+
+4.1 The Context Injector (Django Middleware)
+Every authenticated request passes through the TenantMiddleware.
+
+Python
+# Execution flow within middleware:
+with transaction.atomic():
+    cursor.execute(f"SET LOCAL app.current_school_id = '{jwt_payload.school_id}';")
+    response = get_response(request)
+# Upon response, the transaction closes, and the local variable is destroyed.
+4.2 Database Kernel Enforcement (Raw SQL Migrations)
+The following PostgreSQL policies are hard-coded into the database schema migrations. A developer cannot accidentally bypass this via the Django ORM.
+
+SQL
+-- Enable RLS on the target table
+ALTER TABLE notes_upload ENABLE ROW LEVEL SECURITY;
+
+-- Create the absolute boundary policy
+CREATE POLICY strict_tenant_isolation ON notes_upload
+    AS RESTRICTIVE
+    FOR ALL
+    USING (
+        school_id = current_setting('app.current_school_id', true)::uuid
+        OR 
+        current_setting('app.current_school_id', true) IS NULL -- Accommodates the Visitor flow
+    );
+5. IDENTITY & ACCESS MANAGEMENT (IAM)
+5.1 Dual-Vector Authentication Logic
+The /api/v1/auth/login/ endpoint dynamically routes credential verification:
+
+If role == 'STUDENT': The system bypasses email verification and executes authenticate(username=request.data['username'], password=request.data['password']).
+
+If role IN ['TEACHER', 'MAIN_ADMIN', 'VISITOR']: The system executes authenticate(email=request.data['email'], password=request.data['password']).
+
+5.2 JSON Web Token (JWT) Contract
+Tokens are issued with a 15-minute expiration (Access) and 7-day expiration (Refresh). The payload permanently embeds the routing context to eliminate database lookups on every API call.
+
+JSON
+{
+  "token_type": "access",
+  "exp": 1717830000,
+  "user_id": "a1b2c3d4-e5f6-7890-1234-56789abcdef0",
+  "role": "STUDENT",
+  "school_id": "99999999-1111-2222-3333-444444444444" 
+}
+Note: For a user registering under the VISITOR flow, school_id will equal null.
+
+6. COMPREHENSIVE API SPECIFICATION (V1.0)
+All endpoints enforce strict Content-Type: application/json (except file uploads) and return standardized HTTP status codes (200 OK, 201 Created, 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found).
+
+6.1 Authentication & Discovery
+GET /api/v1/schools/active/
+
+Auth: None (Public)
+
+Purpose: Populates the School Selection Page prior to login.
+
+Response: [{ "id": "uuid", "name": "Prestige Academy", "logo_url": "https://..." }]
+
+POST /api/v1/auth/login/
+
+Auth: None
+
+Request Body: { "role": "STUDENT", "identifier": "ADM1029", "password": "***" }
+
+Response (200): { "access_token": "ey...", "refresh_token": "ey..." }
+
+6.2 The Student Note Pipeline
+POST /api/v1/notes/upload/
+
+Auth: Bearer Token (Role: STUDENT or VISITOR)
+
+Content-Type: multipart/form-data
+
+Action: Streams file to S3, writes database record, triggers background Celery OCR task.
+
+Response (202 Accepted): { "note_id": "uuid", "task_id": "uuid", "status": "PENDING_OCR" }
+
+POST /api/v1/notes/{note_id}/confirm-ocr/
+
+Auth: Bearer Token
+
+Request Body: { "confirmed_text": "Corrected student text..." }
+
+Action: Updates DB. Triggers the Anthropic Claude API via Celery for summarization.
+
+6.3 Admin & Culture Operations
+POST /api/v1/admin/culture-quotes/
+
+Auth: Bearer Token (Role: MAIN_ADMIN or SUB_ADMIN)
+
+Request Body: { "quote": "Excellence is a habit.", "author": "Aristotle", "display_date": "2026-06-09" }
+
+Action: Injects custom culture data specifically scoped to the admin's school_id.
+
+7. ASYNCHRONOUS TASK ARCHITECTURE (AI & OCR)
+Synchronous AI API calls will cause Gunicorn worker exhaustion and HTTP 504 Gateway Timeouts. All complex processing is delegated to Celery.
+
+7.1 Queue Routing
+celery_default: Handles email dispatch and lightweight DB cleanups.
+
+celery_ocr: Dedicated workers for Tesseract / Cloud Vision image processing.
+
+celery_ai: Dedicated workers managing Anthropic Claude HTTP requests.
+
+celery_math: Dedicated, sandboxed workers executing SymPy symbolic mathematics to prevent CPU locking from infinite loop equations.
+
+7.2 Fault Tolerance & Retries
+External APIs fail. All Celery tasks interacting with Claude or AWS must implement an exponential backoff retry strategy:
+@shared_task(bind=True, autoretry_for=(RequestException,), retry_backoff=True, max_retries=3)
+
+8. SECURITY, ERROR HANDLING & LOGGING PROTOCOLS
+8.1 API Security Constraints
+CORS (Cross-Origin Resource Sharing): Strictly whitelisted to the frontend domain URLs. Wildcard (*) is prohibited in production.
+
+Rate Limiting (Throttle Classes):
+
+Standard Endpoints: 100 requests / minute per user.
+
+AI Generation Endpoints: 10 requests / minute per user to prevent API billing abuse.
+
+Authentication Endpoints: 5 requests / minute per IP to prevent brute-force attacks.
+
+8.2 Standardized Error Responses
+To provide a predictable contract for the frontend team, all backend errors must conform to RFC 7807 (Problem Details for HTTP APIs).
+
+JSON
+{
+  "error_code": "TENANT_MISMATCH",
+  "detail": "You do not have permission to access resources belonging to this institution.",
+  "status_code": 403,
+  "timestamp": "2026-06-08T02:57:00Z"
+}
+9. DEPLOYMENT & CI/CD STRATEGY
+Version Control: GitHub Enterprise.
+
+Branching Strategy: Trunk-based development (main -> Production, develop -> Staging).
+
+CI/CD Pipeline (GitHub Actions):
+
+Linting & Formatting: flake8 and black.
+
+Unit Testing: pytest spanning isolated SQLite memory instances. Coverage must exceed 85%.
+
+Build: Docker image compilation.
+
+Deploy: Push container to private registry (Docker Hub / AWS ECR) and trigger webhook to the production server to execute docker-compose pull && docker-compose up -d.
+
+Sign-Off: This detailed specification solidifies the technical implementation of the MVP. Execution of this architecture ensures the platform will meet all PRD requirements regarding multi-tenancy, specific role behaviors, visitor separation, and system scalability.

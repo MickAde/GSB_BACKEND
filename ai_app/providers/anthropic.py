@@ -1,0 +1,50 @@
+from django.conf import settings
+from .base import AIProvider, ConformityResult, SummaryResult
+
+
+class AnthropicProvider(AIProvider):
+    """Claude — long-form analysis, coding, creative writing."""
+
+    name = 'anthropic'
+
+    def is_available(self) -> bool:
+        return bool(getattr(settings, 'ANTHROPIC_API_KEY', ''))
+
+    def generate_summary(self, text: str, subject_context: str = '') -> SummaryResult:
+        import anthropic
+
+        model = getattr(settings, 'ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=1500,
+            messages=[{'role': 'user', 'content': self._build_summary_prompt(text, subject_context)}],
+        )
+        paragraph, bullets, key_points = self._parse_summary_response(message.content[0].text)
+        return SummaryResult(
+            paragraph=paragraph,
+            bullets=bullets,
+            key_points=key_points,
+            provider=self.name,
+            model=model,
+        )
+
+    def compare_notes(self, student_text: str, teacher_text: str, subject_context: str = '') -> ConformityResult:
+        import anthropic
+
+        model = getattr(settings, 'ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=1000,
+            messages=[{'role': 'user', 'content': self._build_conformity_prompt(student_text, teacher_text, subject_context)}],
+        )
+        percentage, analysis = self._parse_conformity_response(message.content[0].text)
+        return ConformityResult(
+            percentage=percentage,
+            analysis=analysis,
+            provider=self.name,
+            model=model,
+        )
