@@ -75,6 +75,36 @@ def _dispatch_ai(note_id, task_id: str | None = None) -> str:
     return result.id
 
 
+def _safe_dispatch_ai(note_id: str, task_id: str) -> None:
+    """
+    Dispatches the AI summary task after the DB transaction commits.
+
+    In production (real Celery workers) apply_async() returns instantly and the
+    202 is already on its way to the client.  In dev (TASK_ALWAYS_EAGER=True)
+    Celery runs the task synchronously, which would block the response for 60 s+.
+    We avoid that by running the eager call in a daemon thread so the HTTP
+    response is returned immediately and the frontend can start polling.
+    """
+    from django.conf import settings
+
+    def _run():
+        try:
+            _dispatch_ai(note_id, task_id)
+        except Exception as exc:
+            logger.error('AI dispatch failed for note %s: %s', note_id, exc)
+            from .models import NoteUpload, NoteStatus
+            NoteUpload.unscoped.filter(pk=note_id).update(
+                status=NoteStatus.FAILED,
+                error_message=f'AI summary could not start: {exc}',
+            )
+
+    if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+    else:
+        _run()
+
+
 # ── 1. Single file upload ─────────────────────────────────────
 
 @extend_schema(tags=['Notes'])
@@ -120,7 +150,9 @@ class NoteUploadView(APIView):
         },
     )
     def post(self, request):
-        serializer = NoteUploadRequestSerializer(data={**request.data, 'file': request.FILES.get('file')})
+        data = request.data.dict() if hasattr(request.data, 'dict') else dict(request.data)
+        data['file'] = request.FILES.get('file')
+        serializer = NoteUploadRequestSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
@@ -365,7 +397,8 @@ class NoteConfirmOCRView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if note.status != NoteStatus.AWAITING_APPROVAL:
+        retryable = {NoteStatus.AWAITING_APPROVAL, NoteStatus.FAILED}
+        if note.status not in retryable:
             return Response(
                 {
                     'error_code': 'INVALID_STATE',
@@ -390,7 +423,7 @@ class NoteConfirmOCRView(APIView):
             note.save(update_fields=['raw_ocr_text', 'status', 'ai_task_id', 'updated_at'])
             # Dispatch only after the transaction commits so the worker never reads
             # a note that is still mid-transition.
-            transaction.on_commit(lambda: _dispatch_ai(str(note.id), task_id))
+            transaction.on_commit(lambda: _safe_dispatch_ai(str(note.id), task_id))
 
         return Response(
             {'note_id': str(note.id), 'task_id': task_id, 'status': NoteStatus.PROCESSING_AI},
@@ -574,9 +607,9 @@ class NoteReplaceView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = NoteUploadRequestSerializer(
-            data={**request.data, 'file': request.FILES.get('file')}
-        )
+        data = request.data.dict() if hasattr(request.data, 'dict') else dict(request.data)
+        data['file'] = request.FILES.get('file')
+        serializer = NoteUploadRequestSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         data      = serializer.validated_data
         file_obj  = data['file']

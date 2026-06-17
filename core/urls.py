@@ -1,6 +1,7 @@
 from django.urls import include, path
 
 from schools.views import DailyContentTodayView
+from teaching.views import AdminLessonPlanListView, AdminLessonPlanReviewView
 
 urlpatterns = [
     # ── Public / auth ─────────────────────────────────────────
@@ -8,17 +9,21 @@ urlpatterns = [
     path('auth/',           include('users.urls')),
     path('notes/',          include('notes.urls')),
 
+    # ── Quiz & performance ────────────────────────────────────
+    path('quiz/',           include('quiz.urls')),
+
+    # ── Lesson plans (teacher) ────────────────────────────────
+    path('lesson-plans/',   include('teaching.urls')),
+
     # ── Daily content (all authenticated users) ───────────────
     path('daily-content/today/', DailyContentTodayView.as_view(), name='daily-content-today'),
 
     # ── School admin endpoints ────────────────────────────────
-    # /api/v1/admin/users/         → user management
-    # /api/v1/admin/culture/       → school culture upsert
-    # /api/v1/admin/daily-content/ → school daily content CRUD
-    path('admin/users/',  include('users.admin_urls')),
-    path('admin/',        include('schools.admin_urls')),
+    path('admin/users/',          include('users.admin_urls')),
+    path('admin/',                include('schools.admin_urls')),
+    path('admin/lesson-plans/',          AdminLessonPlanListView.as_view(),   name='admin-lesson-plan-list'),
+    path('admin/lesson-plans/<uuid:pk>/review/', AdminLessonPlanReviewView.as_view(), name='admin-lesson-plan-review'),
 
     # ── Platform owner endpoints ──────────────────────────────
-    # /api/v1/platform/schools/  → onboard / manage school tenants
     path('platform/schools/', include('schools.platform_urls')),
 ]

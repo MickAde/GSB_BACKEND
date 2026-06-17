@@ -80,6 +80,7 @@ python-dateutil==2.9.0.post0
 python-decouple==3.8
 PyYAML==6.0.3
 realtime==2.31.0
+redis==5.2.1
 referencing==0.37.0
 requests==2.34.2
 rpds-py==2026.5.1

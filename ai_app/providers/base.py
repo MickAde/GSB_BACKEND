@@ -1,3 +1,4 @@
+import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -36,6 +37,21 @@ class ConformityResult:
     model: str
 
 
+@dataclass
+class QuizResult:
+    """List of question dicts ready to bulk-create as QuizQuestion records."""
+    questions: list[dict]
+    provider: str
+    model: str
+
+
+@dataclass
+class LessonSuggestionResult:
+    suggestions: str
+    provider: str
+    model: str
+
+
 class AIProvider(ABC):
     """Abstract base for all AI provider implementations."""
 
@@ -66,6 +82,18 @@ class AIProvider(ABC):
     def compare_notes(self, student_text: str, teacher_text: str, subject_context: str = '') -> ConformityResult:
         raise NotImplementedError(
             f'Provider "{self.name}" does not support conformity analysis. '
+            f'Use "anthropic", "openai", or "gemini" instead.'
+        )
+
+    def generate_quiz_questions(self, text: str, num_questions: int, difficulty: str) -> QuizResult:
+        raise NotImplementedError(
+            f'Provider "{self.name}" does not support quiz generation. '
+            f'Use "anthropic", "openai", or "gemini" instead.'
+        )
+
+    def generate_lesson_suggestions(self, plan_text: str, subject_context: str = '') -> LessonSuggestionResult:
+        raise NotImplementedError(
+            f'Provider "{self.name}" does not support lesson plan suggestions. '
             f'Use "anthropic", "openai", or "gemini" instead.'
         )
 
@@ -131,6 +159,61 @@ class AIProvider(ABC):
             'SIMILARITY_ANALYSIS:\n'
             '<3-5 sentences: what the student captured well, what is missing, '
             'and one actionable improvement suggestion.>'
+        )
+
+    def _build_quiz_prompt(self, text: str, num_questions: int, difficulty: str) -> str:
+        difficulty_guidance = {
+            'easy':      'straightforward recall and basic understanding',
+            'moderate':  'application and some analysis',
+            'difficult': 'critical thinking, analysis, and synthesis',
+        }.get(difficulty, 'application and some analysis')
+
+        return (
+            f'You are an educational quiz creator. Generate exactly {num_questions} quiz questions '
+            f'from the student notes below. Difficulty level: {difficulty} ({difficulty_guidance}).\n\n'
+            f'Mix multiple-choice questions (type: "MCQ") and true/false questions (type: "TF").\n'
+            f'Aim for roughly 70% MCQ and 30% TF.\n\n'
+            f'Return ONLY a valid JSON array. Each element must have exactly these fields:\n'
+            '{\n'
+            '  "type": "MCQ" or "TF",\n'
+            '  "question": "question text",\n'
+            '  "option_a": "first option",\n'
+            '  "option_b": "second option",\n'
+            '  "option_c": "third option (empty string for TF)",\n'
+            '  "option_d": "fourth option (empty string for TF)",\n'
+            '  "correct": "A", "B", "C", or "D",\n'
+            '  "explanation": "brief explanation of why this is the correct answer"\n'
+            '}\n\n'
+            'For TF questions: option_a = "True", option_b = "False", option_c = "", option_d = ""\n'
+            'Do not include any text before or after the JSON array.\n\n'
+            f'Student Notes:\n---\n{text}\n---'
+        )
+
+    def _parse_quiz_response(self, raw: str) -> list[dict]:
+        # Strip markdown fences if present
+        cleaned = raw.strip()
+        if cleaned.startswith('```'):
+            lines = cleaned.splitlines()
+            cleaned = '\n'.join(lines[1:])
+            if cleaned.strip().endswith('```'):
+                cleaned = cleaned.strip()[:-3].strip()
+        return json.loads(cleaned)
+
+    def _build_lesson_suggestions_prompt(self, plan_text: str, subject_context: str = '') -> str:
+        ctx = f'Subject context: {subject_context}\n\n' if subject_context else ''
+        return (
+            'You are an expert educational consultant reviewing a teacher\'s lesson plan.\n'
+            f'{ctx}'
+            'Review the following lesson plan and provide structured improvement suggestions.\n\n'
+            f'{plan_text}\n\n'
+            'Provide feedback using EXACTLY these section headers:\n\n'
+            'STRENGTHS:\n'
+            '<2-3 bullet points starting with - on what the plan does well>\n\n'
+            'IMPROVEMENTS:\n'
+            '<3-5 specific, actionable bullet points starting with - on what to improve>\n\n'
+            'TIPS:\n'
+            '<2-3 practical teaching tips starting with - relevant to this topic>\n\n'
+            'Keep feedback constructive, specific, and actionable. Do not rewrite the plan.'
         )
 
     def _parse_conformity_response(self, text: str) -> tuple[float, str]:

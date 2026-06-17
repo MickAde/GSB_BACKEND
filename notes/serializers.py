@@ -5,10 +5,28 @@ from .models import ConformityStatus, NoteConformityReport, NoteStatus, NoteType
 MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 
 ALLOWED_MIME_TYPES = {
-    'pdf':   ['application/pdf'],
-    'image': ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/tiff'],
-    'voice': ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/webm'],
-    'text':  ['text/plain'],
+    'pdf': [
+        'application/pdf',
+        'application/x-pdf',
+        'application/octet-stream',
+    ],
+    'image': [
+        'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
+        'image/gif', 'image/tiff', 'image/bmp', 'image/heic', 'image/heif',
+        'application/octet-stream',
+    ],
+    'voice': [
+        'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/m4a', 'audio/x-m4a',
+        'audio/wav', 'audio/x-wav', 'audio/ogg', 'audio/webm',
+        'audio/aac', 'audio/x-aac', 'audio/flac', 'audio/x-flac',
+        'application/octet-stream',
+    ],
+    'text': [
+        'text/plain',
+        'text/plain; charset=utf-8',
+        'text/plain;charset=utf-8',
+        'application/octet-stream',
+    ],
 }
 
 

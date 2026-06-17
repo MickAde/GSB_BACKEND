@@ -1,5 +1,5 @@
 from django.conf import settings
-from .base import AIProvider, ConformityResult, SummaryResult
+from .base import AIProvider, ConformityResult, LessonSuggestionResult, QuizResult, SummaryResult
 
 
 class AnthropicProvider(AIProvider):
@@ -45,6 +45,37 @@ class AnthropicProvider(AIProvider):
         return ConformityResult(
             percentage=percentage,
             analysis=analysis,
+            provider=self.name,
+            model=model,
+        )
+
+    def generate_quiz_questions(self, text: str, num_questions: int, difficulty: str) -> QuizResult:
+        import anthropic
+
+        model = getattr(settings, 'ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            messages=[{'role': 'user', 'content': self._build_quiz_prompt(text, num_questions, difficulty)}],
+        )
+        questions = self._parse_quiz_response(message.content[0].text)
+        return QuizResult(questions=questions, provider=self.name, model=model)
+
+    def generate_lesson_suggestions(self, plan_text: str, subject_context: str = '') -> LessonSuggestionResult:
+        import anthropic
+
+        model = getattr(settings, 'ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=1500,
+            messages=[{'role': 'user', 'content': self._build_lesson_suggestions_prompt(plan_text, subject_context)}],
+        )
+        return LessonSuggestionResult(
+            suggestions=message.content[0].text.strip(),
             provider=self.name,
             model=model,
         )

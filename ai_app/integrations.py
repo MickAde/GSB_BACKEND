@@ -18,7 +18,7 @@ from __future__ import annotations
 from django.conf import settings
 
 from .providers import get_provider
-from .providers.base import ConformityResult, ImageResult, SearchResult, SummaryResult
+from .providers.base import ConformityResult, ImageResult, LessonSuggestionResult, QuizResult, SearchResult, SummaryResult
 
 
 def summarize_notes(
@@ -76,6 +76,46 @@ def research(
     """
     name = provider_name or getattr(settings, 'AI_DEFAULT_SEARCH_PROVIDER', 'perplexity')
     return get_provider(name).search(query, **kwargs)
+
+
+def generate_quiz(
+    text: str,
+    num_questions: int,
+    difficulty: str,
+    provider_name: str | None = None,
+) -> QuizResult:
+    """
+    Generate a set of MCQ + True/False quiz questions from student note text.
+
+    Best providers: anthropic (default), openai, gemini.
+
+    Args:
+        text:          The confirmed OCR / typed note content.
+        num_questions: How many questions to generate.
+        difficulty:    'easy', 'moderate', or 'difficult'.
+        provider_name: Override the default provider for this call.
+    """
+    name = provider_name or getattr(settings, 'AI_DEFAULT_TEXT_PROVIDER', 'anthropic')
+    return get_provider(name).generate_quiz_questions(text, num_questions, difficulty)
+
+
+def generate_lesson_suggestions(
+    plan_text: str,
+    subject_context: str = '',
+    provider_name: str | None = None,
+) -> LessonSuggestionResult:
+    """
+    Generate structured improvement suggestions for a teacher's lesson plan.
+
+    Best providers: anthropic (default), openai, gemini.
+
+    Args:
+        plan_text:       The full lesson plan content as a string.
+        subject_context: Optional "Subject: X | Topic: Y" string for context.
+        provider_name:   Override the default provider for this call.
+    """
+    name = provider_name or getattr(settings, 'AI_DEFAULT_TEXT_PROVIDER', 'anthropic')
+    return get_provider(name).generate_lesson_suggestions(plan_text, subject_context)
 
 
 def compare_notes(

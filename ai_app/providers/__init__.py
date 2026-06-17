@@ -13,11 +13,12 @@ import importlib
 # Lazy mapping — providers are only imported when requested.
 # This prevents import errors for packages that aren't installed yet.
 _REGISTRY: dict[str, str] = {
-    'anthropic':  'ai_app.providers.anthropic.AnthropicProvider',
-    'openai':     'ai_app.providers.openai.OpenAIProvider',
-    'gemini':     'ai_app.providers.gemini.GeminiProvider',
-    'perplexity': 'ai_app.providers.perplexity.PerplexityProvider',
-    'midjourney': 'ai_app.providers.midjourney.MidjourneyProvider',
+    'anthropic':   'ai_app.providers.anthropic.AnthropicProvider',
+    'openai':      'ai_app.providers.openai.OpenAIProvider',
+    'gemini':      'ai_app.providers.gemini.GeminiProvider',
+    'perplexity':  'ai_app.providers.perplexity.PerplexityProvider',
+    'midjourney':  'ai_app.providers.midjourney.MidjourneyProvider',
+    'openrouter':  'ai_app.providers.openrouter.OpenRouterProvider',
 }
 
 

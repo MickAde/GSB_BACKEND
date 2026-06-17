@@ -1,5 +1,5 @@
 from django.conf import settings
-from .base import AIProvider, SummaryResult, ImageResult
+from .base import AIProvider, ImageResult, LessonSuggestionResult, QuizResult, SummaryResult
 
 
 class OpenAIProvider(AIProvider):
@@ -31,6 +31,49 @@ class OpenAIProvider(AIProvider):
             paragraph=paragraph,
             bullets=bullets,
             key_points=key_points,
+            provider=self.name,
+            model=model,
+        )
+
+    def compare_notes(self, student_text: str, teacher_text: str, subject_context: str = ''):
+        from .base import ConformityResult
+        model = getattr(settings, 'OPENAI_MODEL', 'gpt-4o')
+        response = self._client().chat.completions.create(
+            model=model,
+            max_tokens=1000,
+            messages=[
+                {'role': 'system', 'content': 'You are an educational quality-control assistant.'},
+                {'role': 'user', 'content': self._build_conformity_prompt(student_text, teacher_text, subject_context)},
+            ],
+        )
+        percentage, analysis = self._parse_conformity_response(response.choices[0].message.content)
+        return ConformityResult(percentage=percentage, analysis=analysis, provider=self.name, model=model)
+
+    def generate_quiz_questions(self, text: str, num_questions: int, difficulty: str) -> QuizResult:
+        model = getattr(settings, 'OPENAI_MODEL', 'gpt-4o')
+        response = self._client().chat.completions.create(
+            model=model,
+            max_tokens=4096,
+            messages=[
+                {'role': 'system', 'content': 'You are an educational quiz creator. Return only valid JSON.'},
+                {'role': 'user', 'content': self._build_quiz_prompt(text, num_questions, difficulty)},
+            ],
+        )
+        questions = self._parse_quiz_response(response.choices[0].message.content)
+        return QuizResult(questions=questions, provider=self.name, model=model)
+
+    def generate_lesson_suggestions(self, plan_text: str, subject_context: str = '') -> LessonSuggestionResult:
+        model = getattr(settings, 'OPENAI_MODEL', 'gpt-4o')
+        response = self._client().chat.completions.create(
+            model=model,
+            max_tokens=1500,
+            messages=[
+                {'role': 'system', 'content': 'You are an expert educational consultant.'},
+                {'role': 'user', 'content': self._build_lesson_suggestions_prompt(plan_text, subject_context)},
+            ],
+        )
+        return LessonSuggestionResult(
+            suggestions=response.choices[0].message.content.strip(),
             provider=self.name,
             model=model,
         )

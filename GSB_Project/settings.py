@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     'users.apps.UsersConfig',
     'notes.apps.NotesConfig',
     'ai_app.apps.AiAppConfig',
+    'quiz.apps.QuizConfig',
+    'teaching.apps.TeachingConfig',
 ]
 
 MIDDLEWARE = [
@@ -243,7 +245,16 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False  # Never wildcard in any environment
 
 # ── Celery ────────────────────────────────────────────────────
-CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+# In local dev (DEBUG=True) tasks run synchronously in the same process.
+# memory:// broker avoids needing Redis or the redis Python package installed.
+CELERY_TASK_ALWAYS_EAGER     = DEBUG
+CELERY_TASK_EAGER_PROPAGATES = DEBUG
+
+CELERY_BROKER_URL = (
+    'memory://localhost/'
+    if DEBUG
+    else config('REDIS_URL', default='redis://localhost:6379/0')
+)
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
@@ -251,9 +262,10 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_ROUTES = {
-    'notes.tasks.run_ocr_pipeline': {'queue': 'celery_ocr'},
-    'ai_app.tasks.run_ai_summary': {'queue': 'celery_ai'},
-    'core.tasks.*': {'queue': 'celery_default'},
+    'notes.tasks.run_ocr_pipeline':          {'queue': 'celery_ocr'},
+    'ai_app.tasks.run_ai_summary':           {'queue': 'celery_ai'},
+    'quiz.tasks.generate_quiz_questions':    {'queue': 'celery_ai'},
+    'core.tasks.*':                          {'queue': 'celery_default'},
 }
 
 # ── Supabase Storage ──────────────────────────────────────────
@@ -283,11 +295,15 @@ OPENAI_IMAGE_MODEL = config('OPENAI_IMAGE_MODEL', default='dall-e-3')
 
 # Google — Gemini (multimodal, Google Workspace)
 GEMINI_API_KEY    = config('GEMINI_API_KEY',    default='')
-GEMINI_MODEL      = config('GEMINI_MODEL',      default='gemini-1.5-pro-latest')
+GEMINI_MODEL      = config('GEMINI_MODEL',      default='gemini-3-flash-preview')
 
 # Perplexity — Search / research with live citations
 PERPLEXITY_API_KEY = config('PERPLEXITY_API_KEY', default='')
 PERPLEXITY_MODEL   = config('PERPLEXITY_MODEL',   default='sonar')
+
+# OpenRouter — OpenAI-compatible gateway to 200+ models (great for dev)
+OPENROUTER_API_KEY = config('OPENROUTER_API_KEY', default='')
+OPENROUTER_MODEL   = config('OPENROUTER_MODEL',   default='google/gemini-2.0-flash-001')
 
 # Midjourney — Image generation (no public API yet; configure via proxy service)
 MIDJOURNEY_API_KEY      = config('MIDJOURNEY_API_KEY',      default='')
@@ -335,6 +351,15 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     X_FRAME_OPTIONS = 'DENY'
+
+# ── Tesseract (Windows) ───────────────────────────────────────
+_tesseract_cmd = config('TESSERACT_CMD', default='')
+if _tesseract_cmd:
+    try:
+        import pytesseract
+        pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd
+    except ImportError:
+        pass
 
 # ── Logging ───────────────────────────────────────────────────
 LOGGING = {
