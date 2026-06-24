@@ -13,6 +13,7 @@ from rest_framework import serializers as drf_serializers
 
 from core.pagination import StandardResultsPagination
 from core.permissions import IsAnyAdmin
+from schools.models import SchoolClass
 from .models import User, UserRole
 from .serializers import (
     AdminSetPasswordSerializer,
@@ -108,7 +109,19 @@ class AdminUserListCreateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        user = serializer.save(school=request.user.school)
+        # Resolve optional student_class_id → SchoolClass instance
+        class_id = serializer.validated_data.pop('student_class_id', None)
+        student_class = None
+        if class_id:
+            try:
+                student_class = SchoolClass.unscoped.get(id=class_id, school=request.user.school)
+            except SchoolClass.DoesNotExist:
+                return Response(
+                    {'student_class_id': ['Class not found or does not belong to this school.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        user = serializer.save(school=request.user.school, student_class=student_class)
         logger.info('Admin %s created user %s (%s).', request.user.id, user.id, user.role)
         return Response(UserAdminDetailSerializer(user).data, status=status.HTTP_201_CREATED)
 
@@ -232,7 +245,24 @@ class AdminUserDetailView(APIView):
             )
         serializer = UserAdminUpdateSerializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+
+        # Handle student_class update separately (needs school-scoped lookup)
+        class_id = serializer.validated_data.pop('student_class_id', ...)
         serializer.save()
+
+        if class_id is not ...:  # field was explicitly provided
+            if class_id:
+                try:
+                    user.student_class = SchoolClass.unscoped.get(id=class_id, school=request.user.school)
+                except SchoolClass.DoesNotExist:
+                    return Response(
+                        {'student_class_id': ['Class not found or does not belong to this school.']},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                user.student_class = None
+            user.save(update_fields=['student_class'])
+
         return Response(UserAdminDetailSerializer(user).data)
 
     @extend_schema(

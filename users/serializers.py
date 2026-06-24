@@ -58,8 +58,10 @@ class VisitorRegistrationSerializer(serializers.ModelSerializer):
 
 class MeSerializer(serializers.ModelSerializer):
     """Own profile — readable + updatable fields for GET /auth/me/ and PATCH /auth/me/."""
-    full_name = serializers.CharField(read_only=True)
-    school_name = serializers.CharField(source='school.name', read_only=True, default=None)
+    full_name               = serializers.CharField(read_only=True)
+    school_name             = serializers.CharField(source='school.name',         read_only=True, default=None)
+    student_class_id        = serializers.UUIDField(source='student_class.id',   read_only=True, allow_null=True)
+    student_class_name      = serializers.CharField(source='student_class.name', read_only=True, allow_null=True)
     is_visitor_trial_active = serializers.BooleanField(read_only=True)
 
     class Meta:
@@ -69,6 +71,7 @@ class MeSerializer(serializers.ModelSerializer):
             'first_name', 'last_name', 'full_name',
             'avatar_url',
             'school', 'school_name',
+            'student_class_id', 'student_class_name',
             'is_email_verified',
             'trial_expires_at', 'is_visitor_trial_active',
             'date_joined',
@@ -77,6 +80,7 @@ class MeSerializer(serializers.ModelSerializer):
             'id', 'email', 'username', 'role',
             'avatar_url',
             'school', 'school_name',
+            'student_class_id', 'student_class_name',
             'is_email_verified',
             'trial_expires_at', 'is_visitor_trial_active',
             'date_joined',
@@ -150,12 +154,13 @@ class ResendVerificationSerializer(serializers.Serializer):
 
 class UserCreateSerializer(serializers.Serializer):
     """School admin creates a new user inside their school."""
-    role = serializers.ChoiceField(choices=CreatableUserRole.choices)
-    first_name = serializers.CharField(max_length=150)
-    last_name  = serializers.CharField(max_length=150, required=False, default='')
-    password   = serializers.CharField(write_only=True, min_length=8, style={'input_type': 'password'})
-    email      = serializers.EmailField(required=False, allow_null=True, default=None)
-    username   = serializers.CharField(max_length=150, required=False, allow_null=True, default=None)
+    role             = serializers.ChoiceField(choices=CreatableUserRole.choices)
+    first_name       = serializers.CharField(max_length=150)
+    last_name        = serializers.CharField(max_length=150, required=False, default='')
+    password         = serializers.CharField(write_only=True, min_length=8, style={'input_type': 'password'})
+    email            = serializers.EmailField(required=False, allow_null=True, default=None)
+    username         = serializers.CharField(max_length=150, required=False, allow_null=True, default=None)
+    student_class_id = serializers.UUIDField(required=False, allow_null=True, default=None)
 
     def validate_email(self, value):
         if value and User.objects.filter(email=value).exists():
@@ -207,21 +212,26 @@ class BulkStudentCreateSerializer(serializers.Serializer):
 
 class UserAdminListSerializer(serializers.ModelSerializer):
     """Compact user card for the admin users list page."""
-    full_name = serializers.CharField(read_only=True)
+    full_name          = serializers.CharField(read_only=True)
+    student_class_id   = serializers.UUIDField(source='student_class.id',   read_only=True, allow_null=True)
+    student_class_name = serializers.CharField(source='student_class.name', read_only=True, allow_null=True)
 
     class Meta:
         model = User
         fields = (
             'id', 'role', 'first_name', 'last_name', 'full_name',
             'email', 'username', 'avatar_url', 'is_active', 'date_joined',
+            'student_class_id', 'student_class_name',
         )
         read_only_fields = fields
 
 
 class UserAdminDetailSerializer(serializers.ModelSerializer):
     """Full user detail for the admin user detail / edit page."""
-    full_name = serializers.CharField(read_only=True)
-    school_name = serializers.CharField(source='school.name', read_only=True, default=None)
+    full_name          = serializers.CharField(read_only=True)
+    school_name        = serializers.CharField(source='school.name', read_only=True, default=None)
+    student_class_id   = serializers.UUIDField(source='student_class.id',   read_only=True, allow_null=True)
+    student_class_name = serializers.CharField(source='student_class.name', read_only=True, allow_null=True)
 
     class Meta:
         model = User
@@ -229,6 +239,7 @@ class UserAdminDetailSerializer(serializers.ModelSerializer):
             'id', 'role', 'first_name', 'last_name', 'full_name',
             'email', 'username', 'avatar_url',
             'school', 'school_name',
+            'student_class_id', 'student_class_name',
             'is_active', 'is_email_verified',
             'trial_expires_at', 'date_joined',
         )
@@ -237,9 +248,11 @@ class UserAdminDetailSerializer(serializers.ModelSerializer):
 
 class UserAdminUpdateSerializer(serializers.ModelSerializer):
     """Allowed fields an admin can update on a user."""
+    student_class_id = serializers.UUIDField(required=False, allow_null=True)
+
     class Meta:
         model = User
-        fields = ('first_name', 'last_name', 'is_active')
+        fields = ('first_name', 'last_name', 'is_active', 'student_class_id')
 
 
 class AdminSetPasswordSerializer(serializers.Serializer):

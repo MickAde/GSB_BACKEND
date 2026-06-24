@@ -1,5 +1,5 @@
 from django.conf import settings
-from .base import AIProvider, ConformityResult, LessonSuggestionResult, QuizResult, SummaryResult
+from .base import AIProvider, ConformityResult, LessonDocumentResult, LessonSuggestionResult, QuizResult, SummaryResult
 
 
 class AnthropicProvider(AIProvider):
@@ -79,3 +79,50 @@ class AnthropicProvider(AIProvider):
             provider=self.name,
             model=model,
         )
+
+    def generate_lesson_document(
+        self, doc_type, curriculum_type, subject, topic, subtopic,
+        class_level, term, week, additional_context='',
+    ) -> LessonDocumentResult:
+        import anthropic
+
+        model  = getattr(settings, 'ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        prompt = self._build_lesson_document_prompt(
+            doc_type, curriculum_type, subject, topic, subtopic,
+            class_level, term, week, additional_context,
+        )
+        message = client.messages.create(
+            model=model,
+            max_tokens=8096,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        data = self._parse_lesson_document_response(message.content[0].text)
+        return LessonDocumentResult(
+            title=data.get('title', ''),
+            content_markdown=data.get('content_markdown', ''),
+            board_summary=data.get('board_summary', ''),
+            diagnostic_cards=data.get('diagnostic_cards', []),
+            resource_cards=data.get('resource_cards', []),
+            provider=self.name,
+            model=model,
+        )
+
+    def regenerate_section(
+        self, full_markdown, section_heading, curriculum_type,
+        subject, topic, class_level, instruction='',
+    ) -> str:
+        import anthropic
+
+        model  = getattr(settings, 'ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        prompt = self._build_section_regeneration_prompt(
+            full_markdown, section_heading, curriculum_type,
+            subject, topic, class_level, instruction,
+        )
+        message = client.messages.create(
+            model=model,
+            max_tokens=2048,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        return message.content[0].text.strip()

@@ -9,13 +9,14 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from core.permissions import IsAnyAdmin
-from .models import DailyContent, SchoolCulture
+from .models import DailyContent, SchoolClass, SchoolCulture
 from .serializers import (
     DailyContentSerializer,
     DailyContentUpdateSerializer,
     DailyContentWriteSerializer,
     SchoolAdminSerializer,
     SchoolAdminSelfUpdateSerializer,
+    SchoolClassSerializer,
     SchoolCultureSerializer,
     SchoolCultureWriteSerializer,
 )
@@ -105,6 +106,87 @@ class AdminCultureView(APIView):
 
 
 # ── Daily content ─────────────────────────────────────────────
+
+@extend_schema(tags=['Admin — Classes'])
+class AdminClassListCreateView(APIView):
+    """
+    GET  /api/v1/admin/classes/  — List all classes in the school.
+    POST /api/v1/admin/classes/  — Create a new class.
+
+    **Permission:** MAIN_ADMIN or SUB_ADMIN.
+    """
+    permission_classes = [IsAuthenticated, IsAnyAdmin]
+
+    @extend_schema(summary='List school classes', responses={200: SchoolClassSerializer(many=True)})
+    def get(self, request):
+        qs = SchoolClass.unscoped.filter(school=request.user.school).order_by('name')
+        return Response(SchoolClassSerializer(qs, many=True).data)
+
+    @extend_schema(
+        summary='Create a class',
+        request=SchoolClassSerializer,
+        responses={
+            201: SchoolClassSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            409: OpenApiResponse(description='Class name already exists'),
+        },
+    )
+    def post(self, request):
+        serializer = SchoolClassSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            school_class = serializer.save(school=request.user.school)
+        except IntegrityError:
+            return Response(
+                {'name': [f'A class named "{request.data.get("name")}" already exists in this school.']},
+                status=status.HTTP_409_CONFLICT,
+            )
+        logger.info('Admin %s created class %s.', request.user.id, school_class.id)
+        return Response(SchoolClassSerializer(school_class).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=['Admin — Classes'])
+class AdminClassDetailView(APIView):
+    """
+    PATCH  /api/v1/admin/classes/{id}/  — Rename a class.
+    DELETE /api/v1/admin/classes/{id}/  — Delete a class (unassigns all members).
+
+    **Permission:** MAIN_ADMIN or SUB_ADMIN.
+    """
+    permission_classes = [IsAuthenticated, IsAnyAdmin]
+
+    def _get_class(self, request, pk):
+        try:
+            return SchoolClass.unscoped.get(pk=pk, school=request.user.school)
+        except SchoolClass.DoesNotExist:
+            return None
+
+    @extend_schema(
+        summary='Rename a class',
+        request=SchoolClassSerializer,
+        responses={200: SchoolClassSerializer, 404: OpenApiResponse(description='Not found')},
+    )
+    def patch(self, request, pk):
+        school_class = self._get_class(request, pk)
+        if not school_class:
+            return Response({'error_code': 'NOT_FOUND', 'detail': 'Class not found.', 'status_code': 404}, status=status.HTTP_404_NOT_FOUND)
+        serializer = SchoolClassSerializer(school_class, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(SchoolClassSerializer(school_class).data)
+
+    @extend_schema(
+        summary='Delete a class',
+        responses={204: OpenApiResponse(description='Deleted'), 404: OpenApiResponse(description='Not found')},
+    )
+    def delete(self, request, pk):
+        school_class = self._get_class(request, pk)
+        if not school_class:
+            return Response({'error_code': 'NOT_FOUND', 'detail': 'Class not found.', 'status_code': 404}, status=status.HTTP_404_NOT_FOUND)
+        school_class.delete()
+        logger.info('Admin %s deleted class %s.', request.user.id, pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 @extend_schema(tags=['Admin — Daily Content'])
 class AdminDailyContentListCreateView(APIView):

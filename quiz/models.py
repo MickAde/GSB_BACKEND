@@ -3,6 +3,8 @@ from django.db import models
 from django.conf import settings
 from core.models import TenantBoundModel, TimeStampedModel
 
+DIFFICULTY_ORDER = {'easy': 1, 'moderate': 2, 'difficult': 3}
+
 
 class QuizDifficulty(models.TextChoices):
     EASY      = 'easy',      'Easy'
@@ -137,3 +139,61 @@ class QuizAttemptAnswer(models.Model):
 
     def __str__(self):
         return f'Ans {self.chosen or "—"} ({"✓" if self.is_correct else "✗"})'
+
+
+class TeacherSubjectThreshold(TenantBoundModel):
+    """
+    Teacher-defined minimum quiz requirements for a subject.
+    Students cannot generate quizzes below these minimums for notes in this subject.
+    """
+    id             = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    teacher        = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='quiz_thresholds',
+    )
+    subject        = models.CharField(max_length=100, db_index=True)
+    min_questions  = models.PositiveSmallIntegerField(default=5)
+    min_difficulty = models.CharField(
+        max_length=10,
+        choices=QuizDifficulty.choices,
+        default=QuizDifficulty.EASY,
+    )
+
+    class Meta:
+        db_table       = 'quiz_teacher_threshold'
+        unique_together = [['school', 'teacher', 'subject']]
+
+    def __str__(self):
+        return f'{self.teacher} – {self.subject} (≥{self.min_questions}q, ≥{self.min_difficulty})'
+
+
+class StudentQuizPreferences(TimeStampedModel):
+    """
+    A student's saved default quiz settings (global, not per-subject).
+    Validated against teacher thresholds at quiz creation time.
+    """
+    id            = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    student       = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='quiz_preferences',
+    )
+    school        = models.ForeignKey(
+        'schools.School',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='+',
+    )
+    num_questions = models.PositiveSmallIntegerField(default=10)
+    difficulty    = models.CharField(
+        max_length=10,
+        choices=QuizDifficulty.choices,
+        default=QuizDifficulty.MODERATE,
+    )
+
+    class Meta:
+        db_table = 'quiz_student_preferences'
+
+    def __str__(self):
+        return f'{self.student} – {self.num_questions}q, {self.difficulty}'

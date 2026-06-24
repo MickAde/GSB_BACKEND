@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .admin_views import (
+    AdminClassDetailView,
+    AdminClassListCreateView,
     AdminCultureView,
     AdminDailyContentDetailView,
     AdminDailyContentListCreateView,
@@ -10,6 +12,8 @@ from .admin_views import (
 urlpatterns = [
     path('school/',                      AdminSchoolView.as_view(),                   name='admin-school'),
     path('culture/',                     AdminCultureView.as_view(),                  name='admin-culture'),
+    path('classes/',                     AdminClassListCreateView.as_view(),           name='admin-class-list'),
+    path('classes/<uuid:pk>/',           AdminClassDetailView.as_view(),              name='admin-class-detail'),
     path('daily-content/',               AdminDailyContentListCreateView.as_view(),   name='admin-daily-content-list'),
     path('daily-content/<uuid:pk>/',     AdminDailyContentDetailView.as_view(),       name='admin-daily-content-detail'),
 ]

@@ -69,6 +69,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff = models.BooleanField(default=False)
     date_joined = models.DateTimeField(auto_now_add=True)
 
+    student_class = models.ForeignKey(
+        'schools.SchoolClass',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='members',
+        db_index=True,
+    )
+
     # Visitor-specific
     trial_expires_at = models.DateTimeField(null=True, blank=True)
 

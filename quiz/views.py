@@ -10,14 +10,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsAnyAdmin, IsStudent, IsTeacher, IsVisitor
-from .models import Quiz, QuizAttempt, QuizAttemptAnswer, QuizQuestion, QuizStatus
+from .models import (
+    DIFFICULTY_ORDER,
+    Quiz, QuizAttempt, QuizAttemptAnswer, QuizQuestion, QuizStatus,
+    StudentQuizPreferences, TeacherSubjectThreshold,
+)
 from .serializers import (
     AttemptResultSerializer,
     CreateQuizSerializer,
     QuizDetailSerializer,
     QuizListSerializer,
     QuizStatusSerializer,
+    StudentQuizPreferencesSerializer,
+    SubjectLimitsSerializer,
     SubmitAttemptSerializer,
+    TeacherSubjectThresholdSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,6 +316,158 @@ class PerformanceStatsView(APIView):
         })
 
 
+class TeacherThresholdListCreateView(APIView):
+    """
+    GET  /api/v1/quiz/teacher/thresholds/  — list the teacher's own thresholds.
+    POST /api/v1/quiz/teacher/thresholds/  — upsert a subject threshold.
+    """
+
+    def get_permissions(self):
+        return [IsTeacher()]
+
+    @extend_schema(responses={200: TeacherSubjectThresholdSerializer(many=True)})
+    def get(self, request):
+        thresholds = TeacherSubjectThreshold.objects.filter(teacher=request.user)
+        return Response(TeacherSubjectThresholdSerializer(thresholds, many=True).data)
+
+    @extend_schema(request=TeacherSubjectThresholdSerializer, responses={200: TeacherSubjectThresholdSerializer})
+    def post(self, request):
+        ser = TeacherSubjectThresholdSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        threshold, created = TeacherSubjectThreshold.objects.update_or_create(
+            school=request.user.school,
+            teacher=request.user,
+            subject=ser.validated_data['subject'],
+            defaults={
+                'min_questions': ser.validated_data['min_questions'],
+                'min_difficulty': ser.validated_data['min_difficulty'],
+            },
+        )
+        http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(TeacherSubjectThresholdSerializer(threshold).data, status=http_status)
+
+
+class TeacherThresholdDetailView(APIView):
+    """
+    PATCH  /api/v1/quiz/teacher/thresholds/<pk>/
+    DELETE /api/v1/quiz/teacher/thresholds/<pk>/
+    """
+
+    def get_permissions(self):
+        return [IsTeacher()]
+
+    def _get_or_404(self, request, pk):
+        try:
+            return TeacherSubjectThreshold.objects.get(pk=pk, teacher=request.user)
+        except TeacherSubjectThreshold.DoesNotExist:
+            return None
+
+    @extend_schema(request=TeacherSubjectThresholdSerializer, responses={200: TeacherSubjectThresholdSerializer})
+    def patch(self, request, pk):
+        threshold = self._get_or_404(request, pk)
+        if not threshold:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        ser = TeacherSubjectThresholdSerializer(threshold, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(ser.data)
+
+    def delete(self, request, pk):
+        threshold = self._get_or_404(request, pk)
+        if not threshold:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        threshold.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class StudentQuizPreferencesView(APIView):
+    """
+    GET   /api/v1/quiz/preferences/ — retrieve (or auto-create) the student's saved defaults.
+    PATCH /api/v1/quiz/preferences/ — update saved defaults.
+    """
+
+    def get_permissions(self):
+        return [(IsStudent | IsVisitor)()]
+
+    def _get_or_create(self, request):
+        prefs, _ = StudentQuizPreferences.objects.get_or_create(
+            student=request.user,
+            defaults={
+                'school': request.user.school,
+                'num_questions': 10,
+                'difficulty': 'moderate',
+            },
+        )
+        return prefs
+
+    @extend_schema(responses={200: StudentQuizPreferencesSerializer})
+    def get(self, request):
+        return Response(StudentQuizPreferencesSerializer(self._get_or_create(request)).data)
+
+    @extend_schema(request=StudentQuizPreferencesSerializer, responses={200: StudentQuizPreferencesSerializer})
+    def patch(self, request):
+        prefs = self._get_or_create(request)
+        ser = StudentQuizPreferencesSerializer(prefs, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(ser.data)
+
+
+class SubjectLimitsView(APIView):
+    """
+    GET /api/v1/quiz/subject-limits/          — all subjects with teacher thresholds.
+    GET /api/v1/quiz/subject-limits/?subject= — effective minimum for one subject.
+    """
+
+    def get_permissions(self):
+        return [(IsStudent | IsVisitor)()]
+
+    def get(self, request):
+        subject = request.query_params.get('subject', '').strip()
+
+        if not (request.user.school):
+            # Visitors have no school → no thresholds apply
+            data = {'subject': subject, 'min_questions': 1, 'min_difficulty': 'easy'}
+            return Response([data] if not subject else data)
+
+        qs = TeacherSubjectThreshold.objects.filter(school=request.user.school)
+        if subject:
+            qs = qs.filter(subject__iexact=subject)
+
+        if not qs.exists():
+            if subject:
+                return Response({'subject': subject, 'min_questions': 1, 'min_difficulty': 'easy'})
+            return Response([])
+
+        if subject:
+            # Strictest combined threshold for one subject
+            thresholds = list(qs)
+            max_min_q    = max(t.min_questions for t in thresholds)
+            max_min_diff = max(
+                (t.min_difficulty for t in thresholds),
+                key=lambda d: DIFFICULTY_ORDER.get(d, 0),
+            )
+            return Response({'subject': subject, 'min_questions': max_min_q, 'min_difficulty': max_min_diff})
+
+        # All subjects: collapse per subject
+        from collections import defaultdict
+        per_subject: dict = defaultdict(list)
+        for t in qs:
+            per_subject[t.subject].append(t)
+
+        result = []
+        for subj, ts in per_subject.items():
+            result.append({
+                'subject':       subj,
+                'min_questions': max(t.min_questions for t in ts),
+                'min_difficulty': max(
+                    (t.min_difficulty for t in ts),
+                    key=lambda d: DIFFICULTY_ORDER.get(d, 0),
+                ),
+            })
+        return Response(sorted(result, key=lambda r: r['subject']))
+
+
 class TeacherStudentStatsView(APIView):
     """GET /api/v1/teacher/students/ — all students with quiz performance stats."""
 
@@ -318,11 +477,14 @@ class TeacherStudentStatsView(APIView):
     def get(self, request):
         from users.models import User, UserRole
 
-        students = User.objects.filter(
+        qs = User.objects.filter(
             school=request.user.school,
             role=UserRole.STUDENT,
             is_active=True,
-        ).order_by('last_name', 'first_name')
+        )
+        if request.user.student_class_id:
+            qs = qs.filter(student_class_id=request.user.student_class_id)
+        students = qs.order_by('last_name', 'first_name')
 
         results = []
         for student in students:
@@ -342,3 +504,143 @@ class TeacherStudentStatsView(APIView):
             })
 
         return Response(results)
+
+
+# ── Topic-level stats ─────────────────────────────────────────
+
+class TopicStatsView(APIView):
+    """GET /api/v1/quiz/topic-stats/?subject=Biology&topic=Cell+Structure"""
+
+    def get_permissions(self):
+        return [IsStudent()]
+
+    def get(self, request):
+        from notes.models import NoteUpload
+
+        subject = request.query_params.get('subject', '').strip()
+        topic   = request.query_params.get('topic', '').strip()
+
+        if not subject or not topic:
+            return Response({'error': 'subject and topic are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        notes     = NoteUpload.objects.filter(owner=request.user, subject=subject, topic=topic)
+        note_ids  = notes.values_list('id', flat=True)
+        quizzes   = Quiz.objects.filter(owner=request.user, note__in=note_ids, status=QuizStatus.READY)
+        quiz_ids  = quizzes.values_list('id', flat=True)
+        attempts  = QuizAttempt.unscoped.filter(student=request.user, quiz__in=quiz_ids).order_by('-completed_at')
+
+        total_attempts = attempts.count()
+        agg            = attempts.aggregate(avg=Avg('percentage'))
+        avg_score      = round(float(agg['avg']), 1) if agg['avg'] is not None else None
+        last_attempt   = attempts.first()
+        last_score     = round(float(last_attempt.percentage), 1) if last_attempt else None
+
+        # Mastery: weighted average of last 5 attempts (most recent = highest weight)
+        recent = list(attempts[:5].values_list('percentage', flat=True))
+        if recent:
+            weights  = list(range(len(recent), 0, -1))
+            mastery  = round(sum(float(p) * w for p, w in zip(recent, weights)) / sum(weights), 1)
+        else:
+            mastery = None
+
+        # Confidence trend: recent 3 vs previous 3
+        if total_attempts >= 4:
+            all_pcts = [float(p) for p in attempts.values_list('percentage', flat=True)]
+            recent3  = sum(all_pcts[:3]) / 3
+            prev3    = sum(all_pcts[3:6]) / max(len(all_pcts[3:6]), 1)
+            if   recent3 > prev3 + 2:  trend = 'improving'
+            elif recent3 < prev3 - 2:  trend = 'declining'
+            else:                       trend = 'stable'
+        else:
+            trend = 'not_enough_data'
+
+        # Study time: sum of time_taken_s across attempts
+        time_agg = attempts.aggregate(total_s=Count('time_taken_s'))
+        study_minutes = round(
+            sum(a for a in attempts.values_list('time_taken_s', flat=True) if a) / 60, 1
+        ) if total_attempts else 0
+
+        # Per-subtopic breakdown
+        subtopic_stats = []
+        for note in notes:
+            n_quiz_ids = quizzes.filter(note=note).values_list('id', flat=True)
+            n_attempts = QuizAttempt.unscoped.filter(student=request.user, quiz__in=n_quiz_ids)
+            n_agg      = n_attempts.aggregate(avg=Avg('percentage'), cnt=Count('id'))
+            subtopic_stats.append({
+                'subtopic':  note.subtopic or note.file_name,
+                'note_id':   str(note.id),
+                'attempts':  n_agg['cnt'] or 0,
+                'avg_score': round(float(n_agg['avg']), 1) if n_agg['avg'] is not None else None,
+            })
+
+        subtopic_stats.sort(key=lambda x: (x['avg_score'] is None, x['avg_score'] or 0))
+
+        # AI Recommendation: flag subtopics below 70%
+        weak      = [s for s in subtopic_stats if s['avg_score'] is not None and s['avg_score'] < 70]
+        weak_areas = [s['subtopic'] for s in weak[:3]]
+        est_hours  = len(weak) * 1.0
+        exp_improvement = min(len(weak) * 5, 20)
+
+        return Response({
+            'subject':          subject,
+            'topic':            topic,
+            'notes_count':      notes.count(),
+            'quizzes_taken':    total_attempts,
+            'average_score':    avg_score,
+            'last_score':       last_score,
+            'mastery_level':    mastery,
+            'confidence_trend': trend,
+            'study_minutes':    study_minutes,
+            'subtopic_breakdown': subtopic_stats,
+            'recommendation': {
+                'weak_areas':              weak_areas,
+                'estimated_study_hours':   est_hours,
+                'expected_improvement_pct': exp_improvement,
+            },
+        })
+
+
+class SubjectStatsView(APIView):
+    """GET /api/v1/quiz/subject-stats/?subject=Biology"""
+
+    def get_permissions(self):
+        return [IsStudent()]
+
+    def get(self, request):
+        from notes.models import NoteUpload
+
+        subject = request.query_params.get('subject', '').strip()
+        if not subject:
+            return Response({'error': 'subject is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        notes    = NoteUpload.objects.filter(owner=request.user, subject=subject)
+        note_ids = notes.values_list('id', flat=True)
+        quizzes  = Quiz.objects.filter(owner=request.user, note__in=note_ids, status=QuizStatus.READY)
+        quiz_ids = quizzes.values_list('id', flat=True)
+        attempts = QuizAttempt.unscoped.filter(student=request.user, quiz__in=quiz_ids)
+        agg      = attempts.aggregate(avg=Avg('percentage'), total=Count('id'))
+
+        topics = sorted(set(t for t in notes.values_list('topic', flat=True) if t))
+
+        topic_rows = []
+        for t in topics:
+            t_note_ids = notes.filter(topic=t).values_list('id', flat=True)
+            t_quiz_ids = quizzes.filter(note__in=t_note_ids).values_list('id', flat=True)
+            t_agg      = QuizAttempt.unscoped.filter(
+                student=request.user, quiz__in=t_quiz_ids
+            ).aggregate(avg=Avg('percentage'), cnt=Count('id'))
+            topic_rows.append({
+                'topic':       t,
+                'notes_count': notes.filter(topic=t).count(),
+                'quizzes':     t_agg['cnt'] or 0,
+                'avg_score':   round(float(t_agg['avg']), 1) if t_agg['avg'] is not None else None,
+            })
+
+        return Response({
+            'subject':      subject,
+            'topics_count': len(topics),
+            'notes_count':  notes.count(),
+            'quizzes_taken': agg['total'] or 0,
+            'average_score': round(float(agg['avg']), 1) if agg['avg'] is not None else None,
+            'topics': topic_rows,
+        })

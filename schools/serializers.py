@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import DailyContent, School, SchoolCulture
+from .models import DailyContent, School, SchoolClass, SchoolCulture
 
 
 # ── Public serializers ────────────────────────────────────────
@@ -51,6 +51,13 @@ class SchoolAdminSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'onboarding_date', 'created_at', 'updated_at')
 
 
+class SchoolCurriculumSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for reading/updating just the curriculum type."""
+    class Meta:
+        model  = School
+        fields = ('curriculum_type',)
+
+
 class SchoolCreateSerializer(serializers.ModelSerializer):
     """Platform owner creates a new school (tenant)."""
     class Meta:
@@ -74,7 +81,7 @@ class SchoolAdminSelfUpdateSerializer(serializers.ModelSerializer):
     """School admin updates their own school's public info — slug and is_active are platform-owner only."""
     class Meta:
         model = School
-        fields = ('name', 'logo_url', 'address', 'contact_email', 'contact_phone')
+        fields = ('name', 'logo_url', 'address', 'contact_email', 'contact_phone', 'curriculum_type')
 
 
 # ── Daily content serializers ─────────────────────────────────
@@ -99,6 +106,19 @@ class DailyContentUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyContent
         fields = ('body', 'author')
+
+
+class SchoolClassSerializer(serializers.ModelSerializer):
+    """Class record — used for admin CRUD and the class selector."""
+    member_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = SchoolClass
+        fields = ('id', 'name', 'member_count')
+        read_only_fields = ('id',)
+
+    def get_member_count(self, obj):
+        return obj.members.filter(is_active=True).count()
 
 
 class DailyContentTodaySerializer(serializers.ModelSerializer):

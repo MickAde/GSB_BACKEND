@@ -52,6 +52,18 @@ class LessonSuggestionResult:
     model: str
 
 
+@dataclass
+class LessonDocumentResult:
+    """Full AI-generated lesson document with diagnostic + resource cards."""
+    title:            str
+    content_markdown: str
+    board_summary:    str
+    diagnostic_cards: list[dict]
+    resource_cards:   list[dict]
+    provider:         str
+    model:            str
+
+
 class AIProvider(ABC):
     """Abstract base for all AI provider implementations."""
 
@@ -96,6 +108,168 @@ class AIProvider(ABC):
             f'Provider "{self.name}" does not support lesson plan suggestions. '
             f'Use "anthropic", "openai", or "gemini" instead.'
         )
+
+    def generate_lesson_document(
+        self,
+        doc_type: str,
+        curriculum_type: str,
+        subject: str,
+        topic: str,
+        subtopic: str,
+        class_level: str,
+        term: int,
+        week: int,
+        additional_context: str = '',
+    ) -> LessonDocumentResult:
+        raise NotImplementedError(
+            f'Provider "{self.name}" does not support lesson document generation. '
+            f'Use "anthropic", "openai", or "gemini" instead.'
+        )
+
+    def regenerate_section(
+        self,
+        full_markdown: str,
+        section_heading: str,
+        curriculum_type: str,
+        subject: str,
+        topic: str,
+        class_level: str,
+        instruction: str = '',
+    ) -> str:
+        raise NotImplementedError(
+            f'Provider "{self.name}" does not support section regeneration.'
+        )
+
+    # ── Lesson document prompt builders ──────────────────────────
+
+    _CURRICULUM_RULES = {
+        'nerdc': (
+            'NERDC (Nigerian Educational Research and Development Council) curriculum.\n'
+            '- Use Bloom\'s taxonomy action verbs ONLY for objectives: identify, state, list, name, describe, '
+            'explain, define, compare, contrast, demonstrate, solve, apply, calculate, evaluate, analyse, synthesise, predict, justify.\n'
+            '- Use Nigerian currency ₦ in all money examples.\n'
+            '- Use Nigerian names (e.g. Amaka, Emeka, Bola, Chidi, Ngozi, Yusuf) and local contexts.\n'
+            '- Reference Nigerian foods (jollof rice, eba, egusi, yam), cities (Lagos, Abuja, Kano, Port Harcourt).\n'
+            '- Lesson Plan MUST include all these sections in order: Learning Objectives, Entry Behaviour, '
+            'Materials/Resources, Set Induction, Presentation (numbered steps with Teacher Activity / Student Activity), '
+            'Generalisation, Evaluation (4–6 questions), Assignment.\n'
+            '- Lesson Note MUST include: Learning Objectives, Introduction, Main Content (with numbered sub-sections), '
+            'Key Points Summary, Practice Exercises (5+ questions), Further Reading.\n'
+            '- Each learning objective must begin with a Bloom\'s verb and be measurable.\n'
+            '- Set Induction must be an engaging real-life hook relevant to Nigerian students.\n'
+            '- Presentation steps must be granular: each step has a Teacher Activity and Student Activity.\n'
+        ),
+        'british': (
+            'British / Cambridge National Curriculum.\n'
+            '- Reference KS3/KS4/KS5 key stages as appropriate for the class level.\n'
+            '- Use British spellings (colour, analyse, practise, programme).\n'
+            '- Include SEN/EAL differentiation strategies in lesson plans.\n'
+            '- Use the KSU framework (Knowledge, Skills, Understanding) for objectives.\n'
+            '- Reference Ofsted inspection criteria for lesson quality.\n'
+            '- Include starter, main activity, and plenary structure.\n'
+        ),
+        'american': (
+            'American Common Core Standards curriculum.\n'
+            '- Align objectives to Common Core or NGSS standards where applicable.\n'
+            '- Include formative assessment checkpoints throughout the lesson.\n'
+            '- Use DOK (Depth of Knowledge) levels for differentiation.\n'
+            '- Include bell-ringer/warm-up, instruction, guided practice, independent practice, closure.\n'
+            '- Use American spellings and cultural references.\n'
+        ),
+        'blend_ng_uk': (
+            'Nigeria-British Blend curriculum (NERDC base + British Cambridge elements).\n'
+            '- Follow NERDC section structure and Nigerian context (names, ₦, local examples).\n'
+            '- Also include dual assessment: WAEC-style questions AND IGCSE-style structured questions.\n'
+            '- Use Bloom\'s verbs per NERDC, but also reference Cambridge Assessment Objectives.\n'
+            '- Include SEN differentiation note (British element).\n'
+        ),
+        'blend_ng_us': (
+            'Nigeria-American Blend curriculum (NERDC base + Common Core elements).\n'
+            '- Follow NERDC section structure and Nigerian context (names, ₦, local examples).\n'
+            '- Also include dual assessment: WAEC-style questions AND Common Core aligned questions.\n'
+            '- Include formative checkpoints throughout (American element).\n'
+        ),
+    }
+
+    def _build_lesson_document_prompt(
+        self,
+        doc_type: str,
+        curriculum_type: str,
+        subject: str,
+        topic: str,
+        subtopic: str,
+        class_level: str,
+        term: int,
+        week: int,
+        additional_context: str = '',
+    ) -> str:
+        curriculum_rules = self._CURRICULUM_RULES.get(curriculum_type, self._CURRICULUM_RULES['nerdc'])
+        doc_label  = 'Lesson Plan' if doc_type == 'plan' else 'Lesson Note'
+        term_label = f'{term}{"st" if term == 1 else "nd" if term == 2 else "rd"} Term'
+        ctx = f'\n\nAdditional teacher notes:\n{additional_context}' if additional_context.strip() else ''
+
+        return (
+            f'You are an expert {curriculum_type.upper()} curriculum designer creating a professional {doc_label}.\n\n'
+            f'CURRICULUM RULES:\n{curriculum_rules}\n'
+            f'DOCUMENT DETAILS:\n'
+            f'- Type: {doc_label}\n'
+            f'- Subject: {subject}\n'
+            f'- Topic: {topic}\n'
+            f'- Sub-topic: {subtopic or "N/A"}\n'
+            f'- Class Level: {class_level}\n'
+            f'- Term: {term_label}, Week {week}{ctx}\n\n'
+            'Generate a complete, professional, curriculum-compliant document in Markdown.\n\n'
+            'DIAGNOSTIC CARDS: Generate 3–6 diagnostic cards reviewing your own output.\n'
+            '  Red (urgency="red"): compliance failures — missing mandatory sections, unmeasurable objectives, wrong currency.\n'
+            '  Yellow (urgency="yellow"): improvement opportunities — better localisation, stronger hooks, richer examples.\n'
+            '  Each card: {id, urgency, title, description, section (markdown heading it refers to), '
+            'suggestion, suggested_content (replacement text if applicable, else null)}.\n\n'
+            'RESOURCE CARDS: Generate 2–4 resource suggestions.\n'
+            '  Types: "video", "textbook", "past_questions", "website".\n'
+            '  Each card: {id, type, title, description, relevance}.\n'
+            '  Note: do NOT include actual URLs — just describe the resource.\n\n'
+            'Respond ONLY with valid JSON matching exactly this schema:\n'
+            '{\n'
+            '  "title": "string — descriptive document title",\n'
+            '  "content_markdown": "string — full Markdown document",\n'
+            '  "board_summary": "string — 2-3 sentence summary for the board/screen",\n'
+            '  "diagnostic_cards": [...],\n'
+            '  "resource_cards": [...]\n'
+            '}\n'
+            'Do not include any text outside the JSON object.'
+        )
+
+    def _build_section_regeneration_prompt(
+        self,
+        full_markdown: str,
+        section_heading: str,
+        curriculum_type: str,
+        subject: str,
+        topic: str,
+        class_level: str,
+        instruction: str = '',
+    ) -> str:
+        curriculum_rules = self._CURRICULUM_RULES.get(curriculum_type, self._CURRICULUM_RULES['nerdc'])
+        extra = f'\nSpecific instruction: {instruction}' if instruction.strip() else ''
+        return (
+            f'You are an expert {curriculum_type.upper()} curriculum designer.\n'
+            f'CURRICULUM RULES:\n{curriculum_rules}\n'
+            f'Context: {subject} — {topic}, {class_level}\n\n'
+            f'The teacher wants to regenerate only the section: "{section_heading}"\n'
+            f'Here is the full document for context:\n\n{full_markdown}\n\n'
+            f'Rewrite ONLY the "{section_heading}" section with improved, curriculum-compliant content.{extra}\n'
+            'Return ONLY the new Markdown content for that section (from the heading line onwards, '
+            'up to but not including the next heading). No JSON wrapping, no preamble.'
+        )
+
+    def _parse_lesson_document_response(self, raw: str) -> dict:
+        cleaned = raw.strip()
+        if cleaned.startswith('```'):
+            lines = cleaned.splitlines()
+            cleaned = '\n'.join(lines[1:])
+            if cleaned.strip().endswith('```'):
+                cleaned = cleaned.strip()[:-3].strip()
+        return json.loads(cleaned)
 
     # ── Shared utilities used by every text provider ──────────────
 

@@ -1,5 +1,9 @@
 from rest_framework import serializers
-from .models import Quiz, QuizAttempt, QuizAttemptAnswer, QuizQuestion
+from .models import (
+    DIFFICULTY_ORDER,
+    Quiz, QuizAttempt, QuizAttemptAnswer, QuizQuestion,
+    StudentQuizPreferences, TeacherSubjectThreshold,
+)
 
 
 # ── Question serializers ──────────────────────────────────────
@@ -69,7 +73,7 @@ class QuizStatusSerializer(serializers.ModelSerializer):
 class CreateQuizSerializer(serializers.Serializer):
     note_id       = serializers.UUIDField()
     difficulty    = serializers.ChoiceField(choices=['easy', 'moderate', 'difficult'], default='moderate')
-    num_questions = serializers.IntegerField(min_value=5, max_value=20, default=10)
+    num_questions = serializers.IntegerField(min_value=1, max_value=50, default=10)
 
     def validate_note_id(self, value):
         from notes.models import NoteUpload, NoteStatus
@@ -83,6 +87,78 @@ class CreateQuizSerializer(serializers.Serializer):
             raise serializers.ValidationError('Note has no text content.')
         self.context['note'] = note
         return value
+
+    def validate(self, data):
+        note = self.context.get('note')
+        request = self.context.get('request')
+        if not (note and request and getattr(request, 'user', None) and request.user.school):
+            return data  # Visitors have no school — skip threshold check
+
+        subject = note.subject
+        if not subject:
+            return data
+
+        thresholds = list(TeacherSubjectThreshold.objects.filter(
+            school=request.user.school,
+            subject__iexact=subject,
+        ))
+        if not thresholds:
+            return data
+
+        max_min_q    = max(t.min_questions for t in thresholds)
+        max_min_diff = max(
+            (t.min_difficulty for t in thresholds),
+            key=lambda d: DIFFICULTY_ORDER.get(d, 0),
+        )
+
+        errors = {}
+        if data.get('num_questions', 10) < max_min_q:
+            errors['num_questions'] = (
+                f'Your teacher requires at least {max_min_q} questions for {subject}. '
+                f'Update your Quiz Settings or choose a higher count.'
+            )
+        if DIFFICULTY_ORDER.get(data.get('difficulty', 'moderate'), 0) < DIFFICULTY_ORDER.get(max_min_diff, 0):
+            errors['difficulty'] = (
+                f'Your teacher requires at least {max_min_diff} difficulty for {subject}. '
+                f'Update your Quiz Settings or choose a higher difficulty.'
+            )
+        if errors:
+            raise serializers.ValidationError(errors)
+        return data
+
+
+class TeacherSubjectThresholdSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = TeacherSubjectThreshold
+        fields = ['id', 'subject', 'min_questions', 'min_difficulty', 'updated_at']
+        read_only_fields = ['id', 'updated_at']
+
+    def validate_min_questions(self, value):
+        if value < 1:
+            raise serializers.ValidationError('Must be at least 1.')
+        if value > 50:
+            raise serializers.ValidationError('Cannot exceed 50.')
+        return value
+
+
+class StudentQuizPreferencesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = StudentQuizPreferences
+        fields = ['id', 'num_questions', 'difficulty', 'updated_at']
+        read_only_fields = ['id', 'updated_at']
+
+    def validate_num_questions(self, value):
+        if value < 1:
+            raise serializers.ValidationError('Must be at least 1.')
+        if value > 50:
+            raise serializers.ValidationError('Cannot exceed 50.')
+        return value
+
+
+class SubjectLimitsSerializer(serializers.Serializer):
+    subject       = serializers.CharField()
+    min_questions = serializers.IntegerField()
+    min_difficulty = serializers.CharField()
 
 
 # ── Attempt serializers ───────────────────────────────────────

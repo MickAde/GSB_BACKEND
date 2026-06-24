@@ -1,5 +1,36 @@
 import uuid
 from django.db import models
+from core.models import TenantBoundModel
+
+
+# ── Curriculum constants (used by School + teaching app) ──────────────────────
+
+class CurriculumType(models.TextChoices):
+    NERDC       = 'nerdc',       'NERDC (Nigerian)'
+    BRITISH     = 'british',     'British / Cambridge'
+    AMERICAN    = 'american',    'American / Common Core'
+    BLEND_NG_UK = 'blend_ng_uk', 'Nigeria + British Blend'
+    BLEND_NG_US = 'blend_ng_us', 'Nigeria + American Blend'
+
+
+CLASS_LEVELS: dict[str, list[str]] = {
+    'nerdc':       ['Nursery 1', 'Nursery 2', 'Primary 1', 'Primary 2', 'Primary 3',
+                    'Primary 4', 'Primary 5', 'Primary 6',
+                    'JSS 1', 'JSS 2', 'JSS 3', 'SSS 1', 'SSS 2', 'SSS 3'],
+    'british':     ['Nursery', 'Reception', 'Year 1', 'Year 2', 'Year 3', 'Year 4',
+                    'Year 5', 'Year 6', 'Year 7', 'Year 8', 'Year 9',
+                    'Year 10', 'Year 11', 'Year 12', 'Year 13'],
+    'american':    ['Pre-K', 'Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4',
+                    'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8',
+                    'Grade 9', 'Grade 10', 'Grade 11', 'Grade 12'],
+    'blend_ng_uk': ['Nursery 1', 'Nursery 2', 'Primary 1', 'Primary 2', 'Primary 3',
+                    'Primary 4', 'Primary 5', 'Primary 6',
+                    'JSS 1', 'JSS 2', 'JSS 3', 'SSS 1', 'SSS 2', 'SSS 3',
+                    'Lower Sixth', 'Upper Sixth'],
+    'blend_ng_us': ['Nursery 1', 'Nursery 2', 'Primary 1', 'Primary 2', 'Primary 3',
+                    'Primary 4', 'Primary 5', 'Primary 6',
+                    'JSS 1', 'JSS 2', 'JSS 3', 'SSS 1', 'SSS 2', 'SSS 3'],
+}
 
 
 class School(models.Model):
@@ -17,6 +48,12 @@ class School(models.Model):
     address = models.TextField(blank=True)
     contact_email = models.EmailField(blank=True)
     contact_phone = models.CharField(max_length=20, blank=True)
+    curriculum_type = models.CharField(
+        max_length=20,
+        choices=CurriculumType.choices,
+        default=CurriculumType.NERDC,
+        help_text='The curriculum framework this school follows. Drives AI lesson generation.',
+    )
     is_active = models.BooleanField(default=True, db_index=True)
     onboarding_date = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -92,3 +129,17 @@ class DailyContent(models.Model):
 
     def __str__(self):
         return f'{self.content_type} — {self.display_date}'
+
+
+class SchoolClass(TenantBoundModel):
+    """A class/form within a school, e.g. 'JSS 1A', 'SS 2B'."""
+    id   = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50, db_index=True)
+
+    class Meta:
+        db_table      = 'schools_class'
+        unique_together = [['school', 'name']]
+        ordering      = ['name']
+
+    def __str__(self):
+        return self.name

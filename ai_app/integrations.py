@@ -18,7 +18,7 @@ from __future__ import annotations
 from django.conf import settings
 
 from .providers import get_provider
-from .providers.base import ConformityResult, ImageResult, LessonSuggestionResult, QuizResult, SearchResult, SummaryResult
+from .providers.base import ConformityResult, ImageResult, LessonDocumentResult, LessonSuggestionResult, QuizResult, SearchResult, SummaryResult
 
 
 def summarize_notes(
@@ -116,6 +116,80 @@ def generate_lesson_suggestions(
     """
     name = provider_name or getattr(settings, 'AI_DEFAULT_TEXT_PROVIDER', 'anthropic')
     return get_provider(name).generate_lesson_suggestions(plan_text, subject_context)
+
+
+def generate_lesson_document(
+    doc_type: str,
+    curriculum_type: str,
+    subject: str,
+    topic: str,
+    subtopic: str,
+    class_level: str,
+    term: int,
+    week: int,
+    additional_context: str = '',
+    provider_name: str | None = None,
+) -> LessonDocumentResult:
+    """
+    Generate a complete AI lesson document (plan or note) with diagnostic + resource cards.
+
+    Best providers: anthropic (default), openai, gemini.
+
+    Args:
+        doc_type:           'plan' or 'note'
+        curriculum_type:    'nerdc', 'british', 'american', 'blend_ng_uk', 'blend_ng_us'
+        subject:            e.g. 'Biology'
+        topic:              e.g. 'Photosynthesis'
+        subtopic:           e.g. 'Light Reactions' (optional)
+        class_level:        e.g. 'SSS 1'
+        term:               1, 2, or 3
+        week:               1–12
+        additional_context: Extra teacher notes/instructions for the AI
+        provider_name:      Override the default provider
+    """
+    name = provider_name or getattr(settings, 'AI_DEFAULT_TEXT_PROVIDER', 'anthropic')
+    return get_provider(name).generate_lesson_document(
+        doc_type=doc_type,
+        curriculum_type=curriculum_type,
+        subject=subject,
+        topic=topic,
+        subtopic=subtopic,
+        class_level=class_level,
+        term=term,
+        week=week,
+        additional_context=additional_context,
+    )
+
+
+def regenerate_lesson_section(
+    full_markdown: str,
+    section_heading: str,
+    curriculum_type: str,
+    subject: str,
+    topic: str,
+    class_level: str,
+    instruction: str = '',
+    provider_name: str | None = None,
+) -> str:
+    """
+    Regenerate a single section of an existing lesson document.
+
+    Args:
+        full_markdown:   The complete current Markdown of the document (context).
+        section_heading: The exact heading text to replace (e.g. '## Learning Objectives').
+        curriculum_type: Curriculum key for rule enforcement.
+        instruction:     Optional specific instruction from the teacher.
+    """
+    name = provider_name or getattr(settings, 'AI_DEFAULT_TEXT_PROVIDER', 'anthropic')
+    return get_provider(name).regenerate_section(
+        full_markdown=full_markdown,
+        section_heading=section_heading,
+        curriculum_type=curriculum_type,
+        subject=subject,
+        topic=topic,
+        class_level=class_level,
+        instruction=instruction,
+    )
 
 
 def compare_notes(
