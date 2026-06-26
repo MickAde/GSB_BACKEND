@@ -61,7 +61,7 @@ class CreateLessonDocumentSerializer(serializers.ModelSerializer):
         model  = LessonDocument
         fields = [
             'doc_type', 'generation_mode',
-            'subject', 'topic', 'subtopic', 'class_level',
+            'subject', 'topic', 'subtopic',
             'term', 'week', 'additional_context',
         ]
 

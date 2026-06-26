@@ -61,9 +61,17 @@ class LessonDocListCreateView(APIView):
         ser.is_valid(raise_exception=True)
         generation_mode = ser.validated_data.get('generation_mode', 'ai')
 
+        class_level = getattr(request.user.student_class, 'name', None)
+        if not class_level:
+            return Response(
+                {'detail': 'You are not assigned to a class. Ask your admin to assign you.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         doc = ser.save(
             teacher=request.user,
             school=request.user.school,
+            class_level=class_level,
             status=LessonDocumentStatus.GENERATING if generation_mode == 'ai' else LessonDocumentStatus.DRAFT,
         )
 
