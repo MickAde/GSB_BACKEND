@@ -1,5 +1,5 @@
 from django.conf import settings
-from .base import AIProvider, ConformityResult, LessonSuggestionResult, QuizResult, SummaryResult
+from .base import AIProvider, ConformityResult, LessonDocumentResult, LessonSuggestionResult, QuizResult, SummaryResult
 
 
 class GeminiProvider(AIProvider):
@@ -51,3 +51,36 @@ class GeminiProvider(AIProvider):
             provider=self.name,
             model=model_name,
         )
+
+    def generate_lesson_document(
+        self, doc_type, curriculum_type, subject, topic, subtopic,
+        class_level, term, week, additional_context='',
+    ) -> LessonDocumentResult:
+        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
+        prompt = self._build_lesson_document_prompt(
+            doc_type, curriculum_type, subject, topic, subtopic,
+            class_level, term, week, additional_context,
+        )
+        response = self._model(model_name).generate_content(prompt)
+        data = self._parse_lesson_document_response(response.text)
+        return LessonDocumentResult(
+            title=data.get('title', ''),
+            content_markdown=data.get('content_markdown', ''),
+            board_summary=data.get('board_summary', ''),
+            diagnostic_cards=data.get('diagnostic_cards', []),
+            resource_cards=data.get('resource_cards', []),
+            provider=self.name,
+            model=model_name,
+        )
+
+    def regenerate_section(
+        self, full_markdown, section_heading, curriculum_type,
+        subject, topic, class_level, instruction='',
+    ) -> str:
+        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
+        prompt = self._build_section_regeneration_prompt(
+            full_markdown, section_heading, curriculum_type,
+            subject, topic, class_level, instruction,
+        )
+        response = self._model(model_name).generate_content(prompt)
+        return response.text.strip()

@@ -245,16 +245,10 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False  # Never wildcard in any environment
 
 # ── Celery ────────────────────────────────────────────────────
-# In local dev (DEBUG=True) tasks run synchronously in the same process.
-# memory:// broker avoids needing Redis or the redis Python package installed.
-CELERY_TASK_ALWAYS_EAGER     = DEBUG
-CELERY_TASK_EAGER_PROPAGATES = DEBUG
+CELERY_TASK_ALWAYS_EAGER     = False
+CELERY_TASK_EAGER_PROPAGATES = False
 
-CELERY_BROKER_URL = (
-    'memory://localhost/'
-    if DEBUG
-    else config('REDIS_URL', default='redis://localhost:6379/0')
-)
+CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/1')
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
