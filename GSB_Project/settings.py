@@ -248,8 +248,9 @@ CORS_ALLOW_ALL_ORIGINS = False  # Never wildcard in any environment
 _REDIS_URL = config('REDIS_URL', default='')
 
 # Run tasks eagerly (in-process) when no Redis URL is configured (local dev
-# without a broker). In production REDIS_URL must always be set.
-CELERY_TASK_ALWAYS_EAGER     = not bool(_REDIS_URL)
+# without a broker). An explicit CELERY_TASK_ALWAYS_EAGER env var always wins.
+_eager_default = not bool(_REDIS_URL)
+CELERY_TASK_ALWAYS_EAGER = config('CELERY_TASK_ALWAYS_EAGER', default=_eager_default, cast=bool)
 CELERY_TASK_EAGER_PROPAGATES = False   # never propagate — let views handle errors
 
 CELERY_BROKER_URL = _REDIS_URL or 'redis://localhost:6379/1'
