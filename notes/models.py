@@ -17,6 +17,7 @@ class NoteType(models.TextChoices):
     IMAGE   = 'image', 'Image'
     VOICE   = 'voice', 'Voice Note'
     TEXT    = 'text',  'Typed Text'
+    DOC     = 'doc',   'Document'   # Word, PowerPoint, Excel, or any other file → AI extraction
 
 
 class NoteUpload(TenantBoundModel):

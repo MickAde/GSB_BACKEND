@@ -44,8 +44,7 @@ def extract_text(file_bytes: bytes, note_type: str) -> str:
         return ''
 
     if note_type == 'voice':
-        logger.info('Voice note OCR not yet implemented — student will review manually.')
-        return ''
+        return _transcribe_audio(file_bytes)
 
     if note_type == 'pdf':
         return _extract_pdf(file_bytes)
@@ -53,8 +52,11 @@ def extract_text(file_bytes: bytes, note_type: str) -> str:
     if note_type == 'image':
         return _extract_image(file_bytes)
 
-    logger.warning('Unknown note_type "%s" — returning empty text.', note_type)
-    return ''
+    if note_type == 'doc':
+        return _extract_doc(file_bytes)
+
+    logger.warning('Unknown note_type "%s" — attempting generic AI extraction.', note_type)
+    return _extract_doc(file_bytes)
 
 
 # ── PDF extraction ────────────────────────────────────────────
@@ -244,6 +246,201 @@ def _detect_media_type(image_bytes: bytes) -> str:
     if image_bytes[:4] in (b'RIFF', b'WEBP'):
         return 'image/webp'
     return 'image/jpeg'  # safe default
+
+
+# ── Audio transcription ───────────────────────────────────────
+
+def _transcribe_audio(audio_bytes: bytes) -> str:
+    """
+    Transcribe audio using AI APIs.
+
+    Priority:
+      1. OpenAI Whisper — purpose-built for speech-to-text, best accuracy
+      2. Gemini — multimodal, supports audio natively
+    Returns empty string if no provider is configured; student can type manually.
+    """
+    from django.conf import settings
+
+    if getattr(settings, 'OPENAI_API_KEY', ''):
+        text = _whisper_transcribe(audio_bytes)
+        if text:
+            return text
+
+    if getattr(settings, 'GEMINI_API_KEY', ''):
+        text = _gemini_audio_transcribe(audio_bytes)
+        if text:
+            return text
+
+    logger.warning('No audio AI provider configured — student will review manually.')
+    return ''
+
+
+def _detect_audio_mime(audio_bytes: bytes) -> tuple[str, str]:
+    """Returns (mime_type, extension) detected from magic bytes."""
+    if audio_bytes[:3] == b'ID3' or audio_bytes[:2] == b'\xff\xfb':
+        return 'audio/mpeg', 'mp3'
+    if audio_bytes[:4] == b'fLaC':
+        return 'audio/flac', 'flac'
+    if audio_bytes[:4] == b'OggS':
+        return 'audio/ogg', 'ogg'
+    if audio_bytes[:4] == b'RIFF':
+        return 'audio/wav', 'wav'
+    if audio_bytes[4:8] == b'ftyp':
+        return 'audio/mp4', 'm4a'
+    return 'audio/mpeg', 'mp3'  # safe default for Whisper
+
+
+def _whisper_transcribe(audio_bytes: bytes) -> str:
+    try:
+        from openai import OpenAI
+        from django.conf import settings
+
+        mime, ext = _detect_audio_mime(audio_bytes)
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        transcript = client.audio.transcriptions.create(
+            model='whisper-1',
+            file=(f'audio.{ext}', audio_bytes, mime),
+            response_format='text',
+        )
+        text = (transcript or '').strip()
+        logger.info('Whisper transcribed %d chars.', len(text))
+        return text
+    except Exception as exc:
+        logger.exception('Whisper transcription failed: %s', exc)
+        return ''
+
+
+def _gemini_audio_transcribe(audio_bytes: bytes) -> str:
+    try:
+        import google.generativeai as genai
+        from django.conf import settings
+
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        mime, ext = _detect_audio_mime(audio_bytes)
+        model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
+
+        # Gemini requires uploading the file first
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        try:
+            audio_file = genai.upload_file(tmp_path, mime_type=mime)
+            model    = genai.GenerativeModel(model_name)
+            response = model.generate_content([
+                'Transcribe this audio exactly as spoken. Output only the raw transcribed text — no summaries, no labels.',
+                audio_file,
+            ])
+            text = (response.text or '').strip()
+            logger.info('Gemini audio transcribed %d chars.', len(text))
+            return text
+        finally:
+            os.unlink(tmp_path)
+
+    except Exception as exc:
+        logger.exception('Gemini audio transcription failed: %s', exc)
+        return ''
+
+
+# ── Document extraction (Word / PowerPoint / Excel / other) ──
+
+def _extract_doc(file_bytes: bytes) -> str:
+    """
+    Extract text from office documents and arbitrary files.
+
+    Strategy:
+      1. Try python-docx  (.docx)
+      2. Try python-pptx  (.pptx)
+      3. Try openpyxl     (.xlsx)
+      4. Try plain UTF-8 decode (CSV, code files, etc.)
+      5. Fall back to AI Vision on first page rendered as image
+    Each step is attempted silently; the first that returns text wins.
+    """
+    text = _try_docx(file_bytes)
+    if text:
+        return text
+
+    text = _try_pptx(file_bytes)
+    if text:
+        return text
+
+    text = _try_xlsx(file_bytes)
+    if text:
+        return text
+
+    text = _try_plain_text(file_bytes)
+    if text:
+        return text
+
+    logger.info('No structured extraction succeeded — sending to AI Vision.')
+    return _vision_transcribe(file_bytes)
+
+
+def _try_docx(file_bytes: bytes) -> str:
+    try:
+        import docx
+        from io import BytesIO
+        doc = docx.Document(BytesIO(file_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        text = '\n'.join(paragraphs).strip()
+        if text:
+            logger.info('python-docx extracted %d chars.', len(text))
+        return text
+    except Exception:
+        return ''
+
+
+def _try_pptx(file_bytes: bytes) -> str:
+    try:
+        from pptx import Presentation
+        from io import BytesIO
+        prs = Presentation(BytesIO(file_bytes))
+        lines = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        t = para.text.strip()
+                        if t:
+                            lines.append(t)
+        text = '\n'.join(lines).strip()
+        if text:
+            logger.info('python-pptx extracted %d chars.', len(text))
+        return text
+    except Exception:
+        return ''
+
+
+def _try_xlsx(file_bytes: bytes) -> str:
+    try:
+        import openpyxl
+        from io import BytesIO
+        wb = openpyxl.load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
+        lines = []
+        for sheet in wb.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                cells = [str(c) for c in row if c is not None]
+                if cells:
+                    lines.append('\t'.join(cells))
+        wb.close()
+        text = '\n'.join(lines).strip()
+        if text:
+            logger.info('openpyxl extracted %d chars.', len(text))
+        return text
+    except Exception:
+        return ''
+
+
+def _try_plain_text(file_bytes: bytes) -> str:
+    try:
+        text = file_bytes.decode('utf-8').strip()
+        if len(text) >= 10:
+            logger.info('Plain UTF-8 decode extracted %d chars.', len(text))
+            return text
+        return ''
+    except Exception:
+        return ''
 
 
 # ── Tesseract fallback ────────────────────────────────────────

@@ -27,6 +27,16 @@ ALLOWED_MIME_TYPES = {
         'text/plain;charset=utf-8',
         'application/octet-stream',
     ],
+    'doc': [
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/zip',
+        'application/octet-stream',
+    ],
 }
 
 

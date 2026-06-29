@@ -90,10 +90,15 @@ def _download_file(file_url: str) -> bytes | None:
                 logger.error('Failed to download %s: %s', file_url, exc)
                 return None
 
-    from pathlib import Path
-    local_path = Path(settings.MEDIA_ROOT) / file_url.lstrip('/')
+    # Strip MEDIA_URL prefix so we get the path relative to MEDIA_ROOT.
+    # default_storage.url() returns e.g. '/media/notes/uuid-file.pdf';
+    # prepending MEDIA_ROOT would double the 'media/' segment.
+    from django.core.files.storage import default_storage
+    media_url = getattr(settings, 'MEDIA_URL', '/media/')
+    relative = file_url[len(media_url):] if file_url.startswith(media_url) else file_url.lstrip('/')
     try:
-        return local_path.read_bytes()
-    except OSError as exc:
-        logger.error('Failed to read local file %s: %s', local_path, exc)
+        with default_storage.open(relative, 'rb') as fh:
+            return fh.read()
+    except Exception as exc:
+        logger.error('Failed to read local file "%s": %s', relative, exc)
         return None

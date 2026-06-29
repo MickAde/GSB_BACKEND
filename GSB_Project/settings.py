@@ -245,10 +245,14 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False  # Never wildcard in any environment
 
 # ── Celery ────────────────────────────────────────────────────
-CELERY_TASK_ALWAYS_EAGER     = False
-CELERY_TASK_EAGER_PROPAGATES = False
+_REDIS_URL = config('REDIS_URL', default='')
 
-CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/1')
+# Run tasks eagerly (in-process) when no Redis URL is configured (local dev
+# without a broker). In production REDIS_URL must always be set.
+CELERY_TASK_ALWAYS_EAGER     = not bool(_REDIS_URL)
+CELERY_TASK_EAGER_PROPAGATES = False   # never propagate — let views handle errors
+
+CELERY_BROKER_URL = _REDIS_URL or 'redis://localhost:6379/1'
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'

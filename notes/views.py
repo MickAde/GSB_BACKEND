@@ -181,9 +181,13 @@ class NoteUploadView(APIView):
             note.save(update_fields=['raw_ocr_text', 'status'])
             task_id = ''
         else:
-            task_id = _dispatch_ocr(note.id)
-            note.ocr_task_id = task_id
-            note.save(update_fields=['ocr_task_id'])
+            try:
+                task_id = _dispatch_ocr(note.id)
+                note.ocr_task_id = task_id
+                note.save(update_fields=['ocr_task_id'])
+            except Exception as exc:
+                logger.error('Could not dispatch OCR task for note %s: %s', note.id, exc)
+                task_id = ''
 
         return Response(
             {'note_id': str(note.id), 'task_id': task_id, 'status': note.status},
@@ -653,9 +657,13 @@ class NoteReplaceView(APIView):
         else:
             note.status = NoteStatus.PENDING_OCR
             note.save(update_fields=update_fields)
-            task_id = _dispatch_ocr(note.id)
-            note.ocr_task_id = task_id
-            note.save(update_fields=['ocr_task_id'])
+            try:
+                task_id = _dispatch_ocr(note.id)
+                note.ocr_task_id = task_id
+                note.save(update_fields=['ocr_task_id'])
+            except Exception as exc:
+                logger.error('Could not dispatch OCR task for note %s: %s', note.id, exc)
+                task_id = ''
 
         logger.info('User %s replaced file on note %s.', request.user.id, note.id)
         return Response(
