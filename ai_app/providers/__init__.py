@@ -29,7 +29,7 @@ def get_provider(name: str):
     Raises ValueError   — unknown provider name.
     Raises RuntimeError — provider's API key is not set in settings/.env.
     """
-    path = _REGISTRY.get(name.lower())
+    path = _REGISTRY.get(name.strip().lower())
     if not path:
         raise ValueError(
             f'Unknown AI provider: "{name}". '
