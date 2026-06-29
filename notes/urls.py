@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     NoteUploadView,
     NoteBulkUploadView,
+    NoteCombinedUploadView,
     NoteListView,
     NoteDetailView,
     NoteStatusView,
@@ -17,8 +18,9 @@ from .views import (
 
 urlpatterns = [
     # Upload
-    path('upload/',      NoteUploadView.as_view(),     name='note-upload'),
-    path('upload/bulk/', NoteBulkUploadView.as_view(),  name='note-upload-bulk'),
+    path('upload/',          NoteUploadView.as_view(),          name='note-upload'),
+    path('upload/bulk/',     NoteBulkUploadView.as_view(),      name='note-upload-bulk'),
+    path('upload/combined/', NoteCombinedUploadView.as_view(),  name='note-upload-combined'),
 
     # Collection — own notes
     path('',             NoteListView.as_view(),        name='note-list'),

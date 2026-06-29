@@ -42,6 +42,9 @@ class NoteUpload(TenantBoundModel):
     note_type = models.CharField(max_length=10, choices=NoteType.choices)
     file_size_bytes = models.PositiveIntegerField(default=0)
 
+    # For multi-file combined uploads: [{url, name, note_type}]
+    extra_file_urls = models.JSONField(default=list, blank=True)
+
     # Subject hierarchy: Subject → Topic → Subtopic
     subject = models.CharField(max_length=100, blank=True, db_index=True)
     topic = models.CharField(max_length=100, blank=True)

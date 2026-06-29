@@ -59,6 +59,82 @@ def run_ocr_pipeline(self, note_id: str):
             )
 
 
+@shared_task(
+    bind=True,
+    max_retries=3,
+    queue='celery_ocr',
+    name='notes.tasks.run_combined_ocr_pipeline',
+)
+def run_combined_ocr_pipeline(self, note_id: str):
+    """
+    Multi-file combined OCR pipeline.
+
+    Extracts text from the primary file and all extra files stored in
+    note.extra_file_urls, concatenates them with section separators, and
+    advances the note to AWAITING_STUDENT_APPROVAL with the merged text.
+
+    The student reviews and corrects the combined text once, then one AI
+    summary is generated covering all the uploaded material together.
+    """
+    from .models import NoteUpload, NoteStatus
+    from core.ocr import extract_text
+
+    try:
+        note = NoteUpload.unscoped.select_related('owner').get(pk=note_id)
+    except NoteUpload.DoesNotExist:
+        logger.error('Combined OCR task: NoteUpload %s not found.', note_id)
+        return
+
+    logger.info('Combined OCR starting for note %s (%d extra files)', note_id, len(note.extra_file_urls))
+
+    try:
+        sections = []
+
+        # Primary file
+        primary_bytes = _download_file(note.file_url)
+        if primary_bytes:
+            text = extract_text(primary_bytes, note.note_type)
+            if text.strip():
+                sections.append(f'[{note.file_name}]\n\n{text.strip()}')
+        else:
+            logger.warning('Note %s: primary file could not be downloaded.', note_id)
+
+        # Extra files
+        for extra in note.extra_file_urls:
+            url       = extra.get('url', '')
+            name      = extra.get('name', 'file')
+            note_type = extra.get('note_type', 'doc')
+            if not url:
+                continue
+            file_bytes = _download_file(url)
+            if not file_bytes:
+                logger.warning('Combined OCR: could not download extra file "%s".', name)
+                continue
+            text = extract_text(file_bytes, note_type)
+            if text.strip():
+                sections.append(f'[{name}]\n\n{text.strip()}')
+
+        combined = '\n\n---\n\n'.join(sections)
+
+        note.raw_ocr_text = combined
+        note.status       = NoteStatus.AWAITING_APPROVAL
+        note.save(update_fields=['raw_ocr_text', 'status', 'updated_at'])
+
+        logger.info('Combined OCR complete for note %s — %d chars from %d section(s).',
+                    note_id, len(combined), len(sections))
+
+    except Exception as exc:
+        logger.exception('Combined OCR failed for note %s: %s', note_id, exc)
+        try:
+            countdown = min(10 * 2 ** self.request.retries, 300)
+            raise self.retry(exc=exc, countdown=countdown)
+        except MaxRetriesExceededError:
+            NoteUpload.unscoped.filter(pk=note_id).update(
+                status=NoteStatus.FAILED,
+                error_message=f'Combined OCR failed after {self.max_retries} retries: {exc}',
+            )
+
+
 def _download_file(file_url: str) -> bytes | None:
     """Fetches raw file bytes from Supabase Storage (authenticated) or local media path."""
     if not file_url:

@@ -42,7 +42,19 @@ class AIRateThrottle(UserRateThrottle):
     scope = 'ai_generation'
 
 
-# ── Shared upload helper ──────────────────────────────────────
+# ── Shared upload helpers ─────────────────────────────────────
+
+def _auto_note_type(file_obj) -> str:
+    """Detect note_type from the file's content_type / name extension."""
+    ct   = (getattr(file_obj, 'content_type', '') or '').lower()
+    name = (getattr(file_obj, 'name',         '') or '').lower()
+
+    if ct == 'application/pdf'  or name.endswith('.pdf'):  return 'pdf'
+    if ct.startswith('image/')  or name.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.tiff', '.bmp', '.heic', '.heif')): return 'image'
+    if ct.startswith('audio/')  or name.endswith(('.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.webm')):  return 'voice'
+    if ct == 'text/plain'       or name.endswith('.txt'):  return 'text'
+    return 'doc'  # Word, PowerPoint, Excel, or any other file
+
 
 def _store_file(user, file_obj) -> str:
     """Uploads file to Supabase Storage (prod) or local media (dev). Returns URL."""
@@ -157,7 +169,7 @@ class NoteUploadView(APIView):
         data = serializer.validated_data
 
         file_obj  = data['file']
-        note_type = data['note_type']
+        note_type = data.get('note_type') or _auto_note_type(file_obj)
 
         file_url = _store_file(request.user, file_obj)
 
@@ -234,11 +246,10 @@ class NoteBulkUploadView(APIView):
         },
     )
     def post(self, request):
-        files     = request.FILES.getlist('files')
-        note_type = request.data.get('note_type', 'image')
-        subject   = request.data.get('subject', '')
-        topic     = request.data.get('topic', '')
-        subtopic  = request.data.get('subtopic', '')
+        files    = request.FILES.getlist('files')
+        subject  = request.data.get('subject', '')
+        topic    = request.data.get('topic', '')
+        subtopic = request.data.get('subtopic', '')
 
         if not files:
             return Response(
@@ -251,8 +262,12 @@ class NoteBulkUploadView(APIView):
 
         for file_obj in files:
             try:
+                # Auto-detect per file — don't trust the single posted note_type
+                # because multi-file uploads contain mixed types (PDF + image, etc.)
+                file_note_type = _auto_note_type(file_obj)
+
                 serializer = NoteUploadRequestSerializer(
-                    data={'file': file_obj, 'note_type': note_type,
+                    data={'file': file_obj, 'note_type': file_note_type,
                           'subject': subject, 'topic': topic, 'subtopic': subtopic}
                 )
                 if not serializer.is_valid():
@@ -266,18 +281,21 @@ class NoteBulkUploadView(APIView):
                     school          = request.user.school,
                     file_url        = file_url,
                     file_name       = file_obj.name,
-                    note_type       = note_type,
+                    note_type       = file_note_type,
                     file_size_bytes = file_obj.size,
                     subject         = subject,
                     topic           = topic,
                     subtopic        = subtopic,
-                    status          = NoteStatus.PENDING_OCR if note_type != NoteType.TEXT else NoteStatus.AWAITING_APPROVAL,
+                    status          = NoteStatus.PENDING_OCR if file_note_type != NoteType.TEXT else NoteStatus.AWAITING_APPROVAL,
                 )
 
-                if note_type != NoteType.TEXT:
-                    task_id = _dispatch_ocr(note.id)
-                    note.ocr_task_id = task_id
-                    note.save(update_fields=['ocr_task_id'])
+                if file_note_type != NoteType.TEXT:
+                    try:
+                        task_id = _dispatch_ocr(note.id)
+                        note.ocr_task_id = task_id
+                        note.save(update_fields=['ocr_task_id'])
+                    except Exception as exc:
+                        logger.error('Could not dispatch OCR task for note %s: %s', note.id, exc)
 
                 uploaded.append(note)
 
@@ -567,6 +585,108 @@ class SchoolNoteListView(APIView):
 
 
 # ── 10. Replace note file ────────────────────────────────────
+
+@extend_schema(tags=['Notes'])
+class NoteCombinedUploadView(APIView):
+    """
+    POST /api/v1/notes/upload/combined/
+
+    Upload multiple files that should be treated as ONE note with a single
+    combined summary.  All files are extracted and their text is merged
+    (separated by --- dividers) before the student reviews it once.
+
+    **Allowed roles:** STUDENT, TEACHER
+
+    Returns 202 Accepted — poll `GET /api/v1/notes/{id}/status/` for progress.
+    """
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        return [(IsStudent | IsTeacher)()]
+
+    @extend_schema(
+        summary='Upload multiple files as one combined note',
+        responses={
+            202: inline_serializer(
+                name='CombinedUploadAccepted',
+                fields={
+                    'note_id': drf_serializers.UUIDField(),
+                    'task_id': drf_serializers.CharField(),
+                    'status':  drf_serializers.CharField(),
+                    'file_count': drf_serializers.IntegerField(),
+                },
+            ),
+            400: OpenApiResponse(description='No files provided'),
+        },
+    )
+    def post(self, request):
+        files    = request.FILES.getlist('files')
+        subject  = request.data.get('subject', '')
+        topic    = request.data.get('topic', '')
+        subtopic = request.data.get('subtopic', '')
+
+        if not files:
+            return Response(
+                {'error_code': 'NO_FILES', 'detail': 'No files provided.', 'status_code': 400},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Store every file; first becomes the primary, rest go into extra_file_urls
+        primary_file = files[0]
+        primary_type = _auto_note_type(primary_file)
+        primary_url  = _store_file(request.user, primary_file)
+
+        extra_file_urls = []
+        for f in files[1:]:
+            try:
+                url = _store_file(request.user, f)
+                extra_file_urls.append({
+                    'url':       url,
+                    'name':      f.name,
+                    'note_type': _auto_note_type(f),
+                })
+            except Exception as exc:
+                logger.error('Could not store extra file "%s": %s', f.name, exc)
+
+        # Create ONE note representing all uploaded files combined
+        file_count = 1 + len(extra_file_urls)
+        display_name = (
+            primary_file.name if file_count == 1
+            else f'{primary_file.name} (+{file_count - 1} more)'
+        )
+
+        note = NoteUpload.objects.create(
+            owner           = request.user,
+            school          = request.user.school,
+            file_url        = primary_url,
+            file_name       = display_name,
+            note_type       = primary_type,
+            file_size_bytes = sum(f.size for f in files),
+            subject         = subject,
+            topic           = topic,
+            subtopic        = subtopic,
+            extra_file_urls = extra_file_urls,
+            status          = NoteStatus.PENDING_OCR,
+        )
+
+        try:
+            from .tasks import run_combined_ocr_pipeline
+            result = run_combined_ocr_pipeline.apply_async(
+                args=[str(note.id)], queue='celery_ocr'
+            )
+            note.ocr_task_id = result.id
+            note.save(update_fields=['ocr_task_id'])
+            task_id = result.id
+        except Exception as exc:
+            logger.error('Could not dispatch combined OCR task for note %s: %s', note.id, exc)
+            task_id = ''
+
+        logger.info('User %s combined-uploaded %d file(s) → note %s.', request.user.id, file_count, note.id)
+        return Response(
+            {'note_id': str(note.id), 'task_id': task_id, 'status': note.status, 'file_count': file_count},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
 
 @extend_schema(tags=['Notes'])
 class NoteReplaceView(APIView):
