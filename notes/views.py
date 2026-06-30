@@ -618,7 +618,13 @@ class SchoolNoteListView(APIView):
     )
     def get(self, request):
         from django.db.models import Q
+        from users.models import UserRole
         qs = NoteUpload.objects.select_related('owner').order_by('-created_at')
+
+        # Teachers only see notes from students in their own class.
+        # Admins see everything.
+        if request.user.role == UserRole.TEACHER and request.user.student_class_id:
+            qs = qs.filter(owner__student_class_id=request.user.student_class_id)
 
         owner = request.query_params.get('owner', '').strip()
         if owner:
@@ -649,6 +655,30 @@ class SchoolNoteListView(APIView):
         if page is not None:
             return paginator.get_paginated_response(SchoolNoteListSerializer(page, many=True).data)
         return Response(SchoolNoteListSerializer(qs, many=True).data)
+
+
+# ── 10a. School note detail (teacher / admin) ────────────────
+
+@extend_schema(
+    tags=['Notes'],
+    summary='Get full detail of any note in the teacher\'s class',
+    responses={200: NoteDetailSerializer, 404: OpenApiResponse(description='Not found')},
+)
+class SchoolNoteDetailView(RetrieveAPIView):
+    """GET /api/v1/notes/school/<pk>/ — Teacher/Admin view of a single note."""
+    serializer_class = NoteDetailSerializer
+
+    def get_permissions(self):
+        return [(IsTeacher | IsAnyAdmin)()]
+
+    def get_queryset(self):
+        from users.models import UserRole
+        if getattr(self, 'swagger_fake_view', False):
+            return NoteUpload.objects.none()
+        qs = NoteUpload.objects.select_related('owner')
+        if self.request.user.role == UserRole.TEACHER and self.request.user.student_class_id:
+            qs = qs.filter(owner__student_class_id=self.request.user.student_class_id)
+        return qs
 
 
 # ── 10. Replace note file ────────────────────────────────────
@@ -875,10 +905,15 @@ class NoteConformityListCreateView(APIView):
     """
 
     def get_permissions(self):
+        if self.request.method == 'GET':
+            return [(IsStudent | IsTeacher | IsAnyAdmin)()]
         return [(IsTeacher | IsAnyAdmin)()]
 
     @extend_schema(
         summary='List conformity reports',
+        parameters=[
+            OpenApiParameter('student_note', description='Filter by student note UUID'),
+        ],
         responses={200: ConformityReportSerializer(many=True)},
     )
     def get(self, request):
@@ -887,8 +922,16 @@ class NoteConformityListCreateView(APIView):
             'student_note__owner', 'teacher_note'
         ).order_by('-generated_at')
 
-        if request.user.role == UserRole.TEACHER:
+        if request.user.role == UserRole.STUDENT:
+            # Students only see conformity reports for their own notes.
+            qs = qs.filter(student_note__owner=request.user)
+        elif request.user.role == UserRole.TEACHER:
             qs = qs.filter(teacher_note__owner=request.user)
+        # Admins see all (no additional filter)
+
+        student_note_id = request.query_params.get('student_note', '').strip()
+        if student_note_id:
+            qs = qs.filter(student_note_id=student_note_id)
 
         paginator = StandardResultsPagination()
         page = paginator.paginate_queryset(qs, request, view=self)
@@ -940,6 +983,14 @@ class NoteConformityListCreateView(APIView):
                 {'error_code': 'INVALID_STATE', 'detail': 'Student note must be in READY state.', 'status_code': 409},
                 status=status.HTTP_409_CONFLICT,
             )
+
+        # Ensure the student who owns this note is in the teacher's class.
+        if request.user.student_class_id:
+            if student_note.owner.student_class_id != request.user.student_class_id:
+                return Response(
+                    {'error_code': 'FORBIDDEN', 'detail': 'This student is not in your class.', 'status_code': 403},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         # Teacher note must belong to the requesting teacher and be READY
         try:

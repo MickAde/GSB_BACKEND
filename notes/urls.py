@@ -12,6 +12,7 @@ from .views import (
     NoteDeleteView,
     NoteReplaceView,
     SchoolNoteListView,
+    SchoolNoteDetailView,
     NoteConformityListCreateView,
     NoteConformityDetailView,
     NoteConformityStatusView,
@@ -27,7 +28,8 @@ urlpatterns = [
     path('',             NoteListView.as_view(),        name='note-list'),
 
     # School-wide browse (teacher / admin)
-    path('school/',      SchoolNoteListView.as_view(),  name='note-school-list'),
+    path('school/',           SchoolNoteListView.as_view(),   name='note-school-list'),
+    path('school/<uuid:pk>/', SchoolNoteDetailView.as_view(), name='note-school-detail'),
 
     # Conformity reports
     path('conformity/',                        NoteConformityListCreateView.as_view(), name='note-conformity-list'),

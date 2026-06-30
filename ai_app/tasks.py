@@ -6,6 +6,85 @@ logger = logging.getLogger(__name__)
 
 
 
+def _auto_trigger_conformity(note):
+    """
+    Called after a note reaches READY status.
+
+    - STUDENT note  → find the teacher's READY reference note for the same
+                      subject + class and auto-create a conformity report.
+    - TEACHER note  → find every READY student note for that subject + class
+                      and auto-create conformity reports for all of them.
+
+    Skips if: no subject, no class assignment, or a report already exists.
+    """
+    from notes.models import NoteUpload, NoteStatus, NoteConformityReport
+    from users.models import UserRole
+
+    if not note.subject or not note.owner_id:
+        return
+
+    try:
+        owner = note.owner
+    except Exception:
+        return
+
+    if not owner.student_class_id:
+        return
+
+    if owner.role == UserRole.STUDENT:
+        teacher_note = (
+            NoteUpload.unscoped
+            .filter(
+                school=note.school,
+                subject__iexact=note.subject,
+                status=NoteStatus.READY,
+                owner__role=UserRole.TEACHER,
+                owner__student_class_id=owner.student_class_id,
+            )
+            .order_by('-created_at')
+            .first()
+        )
+        if not teacher_note:
+            return
+
+        if not NoteConformityReport.unscoped.filter(
+            student_note=note, teacher_note=teacher_note
+        ).exists():
+            report = NoteConformityReport.unscoped.create(
+                school=note.school,
+                student_note=note,
+                teacher_note=teacher_note,
+            )
+            run_conformity_analysis.apply_async(args=[str(report.id)], queue='celery_ai')
+            logger.info(
+                'Auto-conformity queued: student note %s vs teacher note %s (report %s)',
+                note.id, teacher_note.id, report.id,
+            )
+
+    elif owner.role == UserRole.TEACHER:
+        student_notes = NoteUpload.unscoped.filter(
+            school=note.school,
+            subject__iexact=note.subject,
+            status=NoteStatus.READY,
+            owner__role=UserRole.STUDENT,
+            owner__student_class_id=owner.student_class_id,
+        )
+        for student_note in student_notes:
+            if not NoteConformityReport.unscoped.filter(
+                student_note=student_note, teacher_note=note
+            ).exists():
+                report = NoteConformityReport.unscoped.create(
+                    school=note.school,
+                    student_note=student_note,
+                    teacher_note=note,
+                )
+                run_conformity_analysis.apply_async(args=[str(report.id)], queue='celery_ai')
+                logger.info(
+                    'Auto-conformity queued: student note %s vs new teacher note %s (report %s)',
+                    student_note.id, note.id, report.id,
+                )
+
+
 @shared_task(
     bind=True,
     max_retries=3,
@@ -68,6 +147,13 @@ def run_ai_summary(self, note_id: str, provider_name: str | None = None):
             'AI summary complete for note %s via %s/%s (%d bullets, %d key points)',
             note_id, result.provider, result.model, len(result.bullets), len(result.key_points),
         )
+
+        # Auto-trigger conformity analysis now that this note is READY.
+        try:
+            note.refresh_from_db()
+            _auto_trigger_conformity(note)
+        except Exception as exc:
+            logger.warning('Auto-conformity trigger failed for note %s: %s', note_id, exc)
 
     except Exception as exc:
         logger.exception('AI summary failed for note %s: %s', note_id, exc)
