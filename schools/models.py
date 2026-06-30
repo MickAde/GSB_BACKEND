@@ -143,3 +143,32 @@ class SchoolClass(TenantBoundModel):
 
     def __str__(self):
         return self.name
+
+
+class Subject(TenantBoundModel):
+    """
+    A subject offered by the school.
+
+    is_general=True  → available to every class in the school (e.g. Maths, English).
+    is_general=False → only available to the classes listed in the `classes` M2M field.
+    """
+    id         = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name       = models.CharField(max_length=100, db_index=True)
+    is_general = models.BooleanField(
+        default=False,
+        help_text='If true this subject is shown to all classes; the classes M2M is ignored.',
+    )
+    classes = models.ManyToManyField(
+        SchoolClass,
+        blank=True,
+        related_name='subjects',
+        help_text='Classes this subject is offered to (only used when is_general=False).',
+    )
+
+    class Meta:
+        db_table        = 'schools_subject'
+        unique_together = [['school', 'name']]
+        ordering        = ['name']
+
+    def __str__(self):
+        return self.name

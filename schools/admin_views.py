@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from core.permissions import IsAnyAdmin
-from .models import DailyContent, SchoolClass, SchoolCulture
+from .models import DailyContent, SchoolClass, SchoolCulture, Subject
 from .serializers import (
     DailyContentSerializer,
     DailyContentUpdateSerializer,
@@ -19,6 +19,7 @@ from .serializers import (
     SchoolClassSerializer,
     SchoolCultureSerializer,
     SchoolCultureWriteSerializer,
+    SubjectSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -310,4 +311,105 @@ class AdminDailyContentDetailView(APIView):
             )
         content.delete()
         logger.info('Admin %s deleted daily content %s.', request.user.id, pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Subjects ──────────────────────────────────────────────────
+
+@extend_schema(tags=['Admin — Subjects'])
+class AdminSubjectListCreateView(APIView):
+    """
+    GET  /api/v1/admin/subjects/  — List all subjects for this school.
+    POST /api/v1/admin/subjects/  — Create a subject (general or class-specific).
+
+    **Permission:** MAIN_ADMIN or SUB_ADMIN.
+    """
+    permission_classes = [IsAuthenticated, IsAnyAdmin]
+
+    def _serializer(self, *args, **kwargs):
+        s = SubjectSerializer(*args, **kwargs)
+        # When many=True DRF returns a ListSerializer; fields live on .child
+        target = s.child if hasattr(s, 'child') else s
+        target.fields['class_ids'].child_relation.queryset = (
+            SchoolClass.unscoped.filter(school=self.request.user.school)
+        )
+        return s
+
+    @extend_schema(summary='List school subjects', responses={200: SubjectSerializer(many=True)})
+    def get(self, request):
+        qs = Subject.unscoped.filter(school=request.user.school).prefetch_related('classes')
+        return Response(self._serializer(qs, many=True).data)
+
+    @extend_schema(
+        summary='Create a subject',
+        request=SubjectSerializer,
+        responses={
+            201: SubjectSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            409: OpenApiResponse(description='Subject name already exists'),
+        },
+    )
+    def post(self, request):
+        serializer = self._serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            subject = serializer.save(school=request.user.school)
+        except IntegrityError:
+            return Response(
+                {'name': [f'A subject named "{request.data.get("name")}" already exists in this school.']},
+                status=status.HTTP_409_CONFLICT,
+            )
+        logger.info('Admin %s created subject "%s".', request.user.id, subject.name)
+        return Response(self._serializer(subject).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=['Admin — Subjects'])
+class AdminSubjectDetailView(APIView):
+    """
+    PATCH  /api/v1/admin/subjects/{id}/  — Update a subject (name, is_general, classes).
+    DELETE /api/v1/admin/subjects/{id}/  — Delete a subject.
+
+    **Permission:** MAIN_ADMIN or SUB_ADMIN.
+    """
+    permission_classes = [IsAuthenticated, IsAnyAdmin]
+
+    def _get(self, request, pk):
+        try:
+            return Subject.unscoped.get(pk=pk, school=request.user.school)
+        except Subject.DoesNotExist:
+            return None
+
+    def _serializer(self, *args, **kwargs):
+        s = SubjectSerializer(*args, **kwargs)
+        target = s.child if hasattr(s, 'child') else s
+        target.fields['class_ids'].child_relation.queryset = (
+            SchoolClass.unscoped.filter(school=self.request.user.school)
+        )
+        return s
+
+    @extend_schema(
+        summary='Update a subject',
+        request=SubjectSerializer,
+        responses={200: SubjectSerializer, 404: OpenApiResponse(description='Not found')},
+    )
+    def patch(self, request, pk):
+        subject = self._get(request, pk)
+        if not subject:
+            return Response({'error_code': 'NOT_FOUND', 'detail': 'Subject not found.', 'status_code': 404}, status=status.HTTP_404_NOT_FOUND)
+        serializer = self._serializer(subject, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        subject.refresh_from_db()
+        return Response(self._serializer(subject).data)
+
+    @extend_schema(
+        summary='Delete a subject',
+        responses={204: OpenApiResponse(description='Deleted'), 404: OpenApiResponse(description='Not found')},
+    )
+    def delete(self, request, pk):
+        subject = self._get(request, pk)
+        if not subject:
+            return Response({'error_code': 'NOT_FOUND', 'detail': 'Subject not found.', 'status_code': 404}, status=status.HTTP_404_NOT_FOUND)
+        subject.delete()
+        logger.info('Admin %s deleted subject %s.', request.user.id, pk)
         return Response(status=status.HTTP_204_NO_CONTENT)

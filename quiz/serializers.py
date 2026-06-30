@@ -9,11 +9,11 @@ from .models import (
 # ── Question serializers ──────────────────────────────────────
 
 class QuizQuestionSerializer(serializers.ModelSerializer):
-    """Questions without answers — used when serving the quiz to a student."""
+    """Questions served during quiz-taking — correct answer included for instant client-side feedback."""
     class Meta:
         model = QuizQuestion
         fields = ['id', 'order', 'question_type', 'question_text',
-                  'option_a', 'option_b', 'option_c', 'option_d']
+                  'option_a', 'option_b', 'option_c', 'option_d', 'correct']
 
 
 class QuizQuestionWithAnswerSerializer(serializers.ModelSerializer):

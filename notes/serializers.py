@@ -69,9 +69,14 @@ class NoteUploadRequestSerializer(serializers.Serializer):
 
 class NoteStatusSerializer(serializers.ModelSerializer):
     """Lightweight status-only response — used for polling."""
+    has_ocr_text = serializers.SerializerMethodField()
+
+    def get_has_ocr_text(self, obj):
+        return bool(obj.raw_ocr_text and obj.raw_ocr_text.strip())
+
     class Meta:
         model  = NoteUpload
-        fields = ('id', 'status', 'error_message', 'updated_at')
+        fields = ('id', 'status', 'error_message', 'updated_at', 'has_ocr_text')
         read_only_fields = fields
 
 

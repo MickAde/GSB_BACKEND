@@ -8,12 +8,14 @@ from rest_framework import status
 
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 
-from .models import DailyContent, School, SchoolCulture
+from django.db.models import Q
+from .models import DailyContent, School, SchoolClass, SchoolCulture, Subject
 from .serializers import (
     DailyContentTodaySerializer,
     SchoolCultureSerializer,
     SchoolDetailSerializer,
     SchoolPublicSerializer,
+    SubjectListSerializer,
 )
 
 
@@ -157,3 +159,35 @@ class DailyContentTodayView(APIView):
             return Response(None, status=status.HTTP_200_OK)
 
         return Response(DailyContentTodaySerializer(content).data)
+
+
+# ── Subjects (authenticated) ──────────────────────────────────
+
+@extend_schema(
+    tags=['Schools'],
+    summary='List subjects available for a class',
+    description=(
+        'Returns subjects the authenticated user can see.\n\n'
+        'Pass `?class_id=<uuid>` to get subjects for a specific class '
+        '(general subjects + class-specific subjects). '
+        'Without `class_id`, all school subjects are returned (useful for admin/teacher views).'
+    ),
+    responses={200: SubjectListSerializer(many=True)},
+)
+class SubjectListView(APIView):
+    """GET /api/v1/schools/subjects/"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        school_id = request.user.school_id
+        if not school_id:
+            return Response([])
+
+        class_id = request.query_params.get('class_id')
+        qs = Subject.unscoped.filter(school_id=school_id)
+
+        if class_id:
+            # Return general subjects OR subjects assigned to this specific class
+            qs = qs.filter(Q(is_general=True) | Q(classes__id=class_id)).distinct()
+
+        return Response(SubjectListSerializer(qs.order_by('name'), many=True).data)

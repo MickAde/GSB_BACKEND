@@ -26,6 +26,13 @@ def generate_quiz_questions(self, quiz_id: str, provider_name: str | None = None
         logger.error('Quiz task: Quiz %s not found.', quiz_id)
         return
 
+    # Idempotency: if a previous retry already created questions but failed to
+    # commit the status update, just mark READY and return.
+    if quiz.questions.exists():
+        logger.warning('Quiz %s already has questions — marking READY (retry idempotency).', quiz_id)
+        Quiz.unscoped.filter(pk=quiz_id).update(status=QuizStatus.READY, error_message='')
+        return
+
     note_text = quiz.note.raw_ocr_text.strip()
     if not note_text:
         Quiz.unscoped.filter(pk=quiz_id).update(
@@ -64,11 +71,15 @@ def generate_quiz_questions(self, quiz_id: str, provider_name: str | None = None
                 explanation=q.get('explanation', ''),
             ))
 
-        QuizQuestion.objects.bulk_create(questions_to_create)
-        Quiz.unscoped.filter(pk=quiz_id).update(
-            status=QuizStatus.READY,
-            error_message='',
-        )
+        # Wrap in atomic so a transient DB error rolls back BOTH the questions
+        # AND the status update together — keeping retry safe (no duplicate questions).
+        from django.db import transaction as db_transaction
+        with db_transaction.atomic():
+            QuizQuestion.objects.bulk_create(questions_to_create)
+            Quiz.unscoped.filter(pk=quiz_id).update(
+                status=QuizStatus.READY,
+                error_message='',
+            )
 
         logger.info(
             'Quiz generation complete for %s via %s/%s — %d questions created.',

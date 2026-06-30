@@ -453,7 +453,74 @@ class NoteConfirmOCRView(APIView):
         )
 
 
-# ── 7. Update metadata ────────────────────────────────────────
+# ── 7. Retry OCR ─────────────────────────────────────────────
+
+@extend_schema(tags=['Notes'])
+class NoteRetryOCRView(APIView):
+    """
+    POST /api/v1/notes/{pk}/retry-ocr/
+
+    Re-queue the OCR pipeline for a note that is in FAILED state with no extracted text.
+    Resets status to PENDING_OCR and clears the error message.
+    """
+    @extend_schema(
+        summary='Retry OCR text extraction',
+        responses={
+            202: inline_serializer(
+                name='RetryOCRAccepted',
+                fields={
+                    'note_id': drf_serializers.UUIDField(),
+                    'task_id': drf_serializers.CharField(),
+                    'status':  drf_serializers.CharField(),
+                },
+            ),
+            404: OpenApiResponse(description='Note not found'),
+            409: OpenApiResponse(description='Note is not in FAILED state'),
+        },
+    )
+    def post(self, request, pk):
+        try:
+            note = NoteUpload.objects.get(pk=pk, owner=request.user)
+        except NoteUpload.DoesNotExist:
+            return Response(
+                {'error_code': 'NOT_FOUND', 'detail': 'Note not found.', 'status_code': 404},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if note.status != NoteStatus.FAILED:
+            return Response(
+                {
+                    'error_code': 'INVALID_STATE',
+                    'detail': f'Cannot retry OCR — note is in "{note.status}" state, not FAILED.',
+                    'status_code': 409,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        note.status        = NoteStatus.PENDING_OCR
+        note.error_message = ''
+        note.raw_ocr_text  = ''
+        note.save(update_fields=['status', 'error_message', 'raw_ocr_text', 'updated_at'])
+
+        task_id = ''
+        try:
+            if note.extra_file_urls:
+                from .tasks import run_combined_ocr_pipeline
+                task = run_combined_ocr_pipeline.apply_async(args=[str(note.id)], queue='celery_ocr')
+            else:
+                from .tasks import run_ocr_pipeline
+                task = run_ocr_pipeline.apply_async(args=[str(note.id)], queue='celery_ocr')
+            task_id = task.id
+        except Exception as exc:
+            logger.error('Could not re-dispatch OCR task for note %s: %s', note.id, exc)
+
+        return Response(
+            {'note_id': str(note.id), 'task_id': task_id, 'status': NoteStatus.PENDING_OCR},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+# ── 8. Update metadata ────────────────────────────────────────
 
 @extend_schema(tags=['Notes'])
 class NoteUpdateView(APIView):

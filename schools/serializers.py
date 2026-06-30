@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import DailyContent, School, SchoolClass, SchoolCulture
+from .models import DailyContent, School, SchoolClass, SchoolCulture, Subject
 
 
 # ── Public serializers ────────────────────────────────────────
@@ -126,3 +126,31 @@ class DailyContentTodaySerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyContent
         fields = ('id', 'content_type', 'body', 'author', 'display_date')
+
+
+# ── Subject serializers ───────────────────────────────────────
+
+class SubjectSerializer(serializers.ModelSerializer):
+    """Full subject record — read + write for admin CRUD."""
+    class_ids   = serializers.PrimaryKeyRelatedField(
+        source='classes',
+        queryset=SchoolClass.objects.none(),  # queryset injected in view
+        many=True,
+        required=False,
+    )
+    class_names = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Subject
+        fields = ('id', 'name', 'is_general', 'class_ids', 'class_names')
+        read_only_fields = ('id',)
+
+    def get_class_names(self, obj):
+        return list(obj.classes.values_list('name', flat=True))
+
+
+class SubjectListSerializer(serializers.ModelSerializer):
+    """Compact read-only list for students / teachers."""
+    class Meta:
+        model  = Subject
+        fields = ('id', 'name', 'is_general')
