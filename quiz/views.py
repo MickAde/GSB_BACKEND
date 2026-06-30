@@ -506,6 +506,71 @@ class TeacherStudentStatsView(APIView):
         return Response(results)
 
 
+# ── Performance history (time-series) ────────────────────────
+
+class PerformanceHistoryView(APIView):
+    """GET /api/v1/quiz/performance/history/ — daily avg scores for the authenticated student."""
+
+    def get_permissions(self):
+        return [(IsStudent | IsVisitor)()]
+
+    def get(self, request):
+        from django.db.models.functions import TruncDate
+
+        points = (
+            QuizAttempt.objects
+            .filter(student=request.user)
+            .annotate(day=TruncDate('completed_at'))
+            .values('day')
+            .annotate(avg=Avg('percentage'), count=Count('id'))
+            .order_by('day')
+        )
+        return Response([
+            {
+                'date':    p['day'].isoformat(),
+                'average': round(float(p['avg']), 1),
+                'count':   p['count'],
+            }
+            for p in points
+        ])
+
+
+class ClassPerformanceHistoryView(APIView):
+    """GET /api/v1/quiz/teacher/class-history/ — daily avg scores across the teacher's class."""
+
+    def get_permissions(self):
+        return [IsTeacher()]
+
+    def get(self, request):
+        from django.db.models.functions import TruncDate
+        from users.models import User, UserRole
+
+        students = User.objects.filter(
+            school=request.user.school,
+            role=UserRole.STUDENT,
+            is_active=True,
+        )
+        if request.user.student_class_id:
+            students = students.filter(student_class_id=request.user.student_class_id)
+
+        points = (
+            QuizAttempt.unscoped
+            .filter(student__in=students)
+            .annotate(day=TruncDate('completed_at'))
+            .values('day')
+            .annotate(avg=Avg('percentage'), count=Count('id'))
+            .order_by('day')
+        )
+        return Response([
+            {
+                'date':    p['day'].isoformat(),
+                'average': round(float(p['avg']), 1),
+                'count':   p['count'],
+            }
+            for p in points
+        ])
+
+
 # ── Topic-level stats ─────────────────────────────────────────
 
 class TopicStatsView(APIView):
