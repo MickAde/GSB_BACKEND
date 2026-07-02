@@ -18,7 +18,7 @@ from __future__ import annotations
 from django.conf import settings
 
 from .providers import get_provider
-from .providers.base import ConformityResult, ImageResult, LessonDocumentResult, LessonSuggestionResult, QuizResult, SearchResult, SummaryResult
+from .providers.base import ConformityResult, ImageResult, LessonDocumentResult, LessonSuggestionResult, QuizResult, SearchResult, SummaryResult  # noqa: F401
 
 
 def summarize_notes(
@@ -190,6 +190,140 @@ def regenerate_lesson_section(
         class_level=class_level,
         instruction=instruction,
     )
+
+
+def generate_embedding(
+    text: str,
+    provider_name: str | None = None,
+) -> list[float]:
+    """
+    Generate a vector embedding for semantic similarity / topic matching.
+
+    Tries the specified provider, then falls back to openai → gemini in order.
+    Raises RuntimeError if no embedding-capable provider is configured.
+
+    Embedding dimensions:
+      openai (text-embedding-3-small): 1536
+      gemini (text-embedding-004):     768
+    Both providers must be used consistently — do not mix dimensions.
+
+    Args:
+        text:          The text to embed (truncated to 8 000 chars internally).
+        provider_name: Force a specific provider ('openai' or 'gemini').
+    """
+    vector, _ = generate_embedding_with_provider(text, provider_name)
+    return vector
+
+
+def generate_embedding_with_provider(
+    text: str,
+    provider_name: str | None = None,
+) -> tuple[list[float], str]:
+    """
+    Like generate_embedding but also returns the name of the provider used.
+
+    Returns:
+        (vector, provider_name_used) — e.g. ([0.1, ...], 'openai')
+    """
+    if provider_name:
+        return get_provider(provider_name).generate_embedding(text), provider_name
+
+    embedding_provider = getattr(settings, 'AI_EMBEDDING_PROVIDER', None)
+    candidates: list[str] = []
+    if embedding_provider:
+        candidates.append(embedding_provider)
+    for fallback in ('openai', 'gemini'):
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    last_exc: Exception | None = None
+    for name in candidates:
+        try:
+            provider = get_provider(name)
+            if provider.is_available():
+                return provider.generate_embedding(text), name
+        except NotImplementedError:
+            continue
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+    raise RuntimeError(
+        'No embedding provider available. '
+        'Set AI_EMBEDDING_PROVIDER=openai or =gemini and ensure the API key is configured. '
+        f'Last error: {last_exc}'
+    )
+
+
+def generate_lesson_plan_content(
+    subject: str,
+    topic: str,
+    subtopic: str,
+    class_level: str,
+    term: int = 1,
+    week: int = 1,
+    curriculum_type: str = 'nerdc',
+    additional_context: str = '',
+    provider_name: str | None = None,
+) -> dict:
+    """
+    Generate all text fields for a legacy LessonPlan using AI.
+
+    Calls generate_lesson_document (doc_type='plan') and maps the structured
+    markdown sections to the LessonPlan model's individual fields.
+
+    Returns a dict with keys: title, objective, materials_needed, introduction,
+    main_content, activities, assessment, homework.
+    """
+    result = generate_lesson_document(
+        doc_type='plan',
+        curriculum_type=curriculum_type,
+        subject=subject,
+        topic=topic,
+        subtopic=subtopic,
+        class_level=class_level,
+        term=term,
+        week=week,
+        additional_context=additional_context,
+        provider_name=provider_name,
+    )
+    return _map_lesson_doc_to_plan_fields(result.title, result.content_markdown)
+
+
+def _map_lesson_doc_to_plan_fields(title: str, markdown: str) -> dict:
+    """Extract LessonPlan field values from the AI-generated lesson plan markdown."""
+    sections: dict[str, str] = {}
+    current_heading: str | None = None
+    current_lines: list[str] = []
+
+    for line in markdown.splitlines():
+        if line.startswith('## '):
+            if current_heading is not None:
+                sections[current_heading] = '\n'.join(current_lines).strip()
+                current_lines = []
+            current_heading = line[3:].strip()
+        elif current_heading is not None:
+            current_lines.append(line)
+
+    if current_heading is not None:
+        sections[current_heading] = '\n'.join(current_lines).strip()
+
+    # Entry Behaviour provides prerequisite context; combine with Set Induction for intro
+    intro_parts = [s for s in [
+        sections.get('Entry Behaviour', ''),
+        sections.get('Set Induction', ''),
+    ] if s]
+
+    return {
+        'title': title,
+        'objective': sections.get('Learning Objectives', ''),
+        'materials_needed': sections.get('Instructional Materials', ''),
+        'introduction': '\n\n'.join(intro_parts),
+        'main_content': sections.get('Presentation', ''),
+        'activities': sections.get('Generalisation', ''),
+        'assessment': sections.get('Evaluation', ''),
+        'homework': sections.get('Assignment', ''),
+    }
 
 
 def compare_notes(

@@ -21,7 +21,7 @@ def generate_quiz_questions(self, quiz_id: str, provider_name: str | None = None
     from .models import Quiz, QuizQuestion, QuizStatus
 
     try:
-        quiz = Quiz.unscoped.select_related('note').get(pk=quiz_id)
+        quiz = Quiz.unscoped.select_related('note', 'lesson_doc').get(pk=quiz_id)
     except Quiz.DoesNotExist:
         logger.error('Quiz task: Quiz %s not found.', quiz_id)
         return
@@ -41,13 +41,28 @@ def generate_quiz_questions(self, quiz_id: str, provider_name: str | None = None
         )
         return
 
+    # When a teacher lesson doc is attached (high conformity path), combine both
+    # sources so the AI generates questions that bridge student notes and official content.
+    if quiz.lesson_doc_id and quiz.lesson_doc:
+        teacher_content = quiz.lesson_doc.content_markdown.strip()
+        if teacher_content:
+            text_to_use = (
+                f"STUDENT NOTES:\n{note_text}"
+                f"\n\n---\n\nTEACHER LESSON NOTE:\n{teacher_content}"
+            )
+            logger.info('Quiz %s will use combined student+teacher content (%d chars).', quiz_id, len(text_to_use))
+        else:
+            text_to_use = note_text
+    else:
+        text_to_use = note_text
+
     logger.info('Quiz generation starting for quiz %s (%s, %s)', quiz_id, quiz.difficulty, quiz.num_questions)
 
     try:
         from ai_app.integrations import generate_quiz
 
         result = generate_quiz(
-            text=note_text,
+            text=text_to_use,
             num_questions=quiz.num_questions,
             difficulty=quiz.difficulty,
             provider_name=provider_name,

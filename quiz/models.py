@@ -40,6 +40,12 @@ class Quiz(TenantBoundModel):
         on_delete=models.CASCADE,
         related_name='quizzes',
     )
+    lesson_doc    = models.ForeignKey(
+        'teaching.LessonDocument',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='quizzes',
+    )
     title         = models.CharField(max_length=255)
     difficulty    = models.CharField(
         max_length=10,

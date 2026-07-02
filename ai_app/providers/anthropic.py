@@ -38,13 +38,14 @@ class AnthropicProvider(AIProvider):
 
         message = client.messages.create(
             model=model,
-            max_tokens=1000,
+            max_tokens=2000,
             messages=[{'role': 'user', 'content': self._build_conformity_prompt(student_text, teacher_text, subject_context)}],
         )
-        percentage, analysis = self._parse_conformity_response(message.content[0].text)
+        percentage, analysis, matched_section = self._parse_conformity_response(message.content[0].text)
         return ConformityResult(
             percentage=percentage,
             analysis=analysis,
+            matched_section=matched_section,
             provider=self.name,
             model=model,
         )
@@ -94,7 +95,7 @@ class AnthropicProvider(AIProvider):
         )
         message = client.messages.create(
             model=model,
-            max_tokens=8096,
+            max_tokens=16000,
             messages=[{'role': 'user', 'content': prompt}],
         )
         data = self._parse_lesson_document_response(message.content[0].text)

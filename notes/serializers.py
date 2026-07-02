@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ConformityStatus, NoteConformityReport, NoteStatus, NoteType, NoteUpload
+from .models import ConformityReportHistory, ConformityStatus, NoteConformityReport, NoteStatus, NoteType, NoteUpload
 
 # Max 20 MB per file
 MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
@@ -179,34 +179,95 @@ class SchoolNoteListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ConformityReportHistorySerializer(serializers.ModelSerializer):
+    """Single historical snapshot of a conformity report before a re-run."""
+    class Meta:
+        model  = ConformityReportHistory
+        fields = (
+            'id', 'run_number',
+            'conformity_percentage', 'similarity_analysis', 'matched_teacher_section',
+            'snapshot_at',
+        )
+        read_only_fields = fields
+
+
 class ConformityReportSerializer(serializers.ModelSerializer):
-    """Full conformity report — used for list and detail views."""
-    student_note_id = serializers.UUIDField(source='student_note.id',           read_only=True)
-    student_name    = serializers.CharField(source='student_note.owner.full_name', read_only=True)
-    teacher_note_id = serializers.UUIDField(source='teacher_note.id',           read_only=True)
-    subject         = serializers.CharField(source='student_note.subject',       read_only=True)
+    """Compact conformity report — used for list views."""
+    student_note_id   = serializers.UUIDField(source='student_note.id',             read_only=True)
+    student_name      = serializers.CharField(source='student_note.owner.full_name', read_only=True)
+    teacher_note_id   = serializers.SerializerMethodField()
+    teacher_ref_title = serializers.SerializerMethodField()
+    teacher_ref_type  = serializers.SerializerMethodField()
+    subject           = serializers.CharField(source='student_note.subject',         read_only=True)
 
     class Meta:
         model  = NoteConformityReport
         fields = (
             'id',
             'student_note_id', 'student_name',
-            'teacher_note_id',
+            'teacher_note_id', 'teacher_ref_title', 'teacher_ref_type',
             'subject',
-            'conformity_percentage', 'similarity_analysis',
-            'status', 'generated_at',
+            'conformity_percentage', 'similarity_analysis', 'matched_teacher_section',
+            'status', 'generated_at', 'last_run_at',
         )
         read_only_fields = fields
 
+    def get_teacher_note_id(self, obj):
+        if obj.teacher_note_id:
+            return str(obj.teacher_note_id)
+        if obj.teacher_lesson_doc_id:
+            return str(obj.teacher_lesson_doc_id)
+        return None
+
+    def get_teacher_ref_title(self, obj):
+        if obj.teacher_note:
+            return obj.teacher_note.file_name
+        if obj.teacher_lesson_doc:
+            return obj.teacher_lesson_doc.title or obj.teacher_lesson_doc.topic
+        return None
+
+    def get_teacher_ref_type(self, obj):
+        if obj.teacher_note_id:
+            return 'note'
+        if obj.teacher_lesson_doc_id:
+            return 'lesson_doc'
+        return None
+
+
+class ConformityReportDetailSerializer(ConformityReportSerializer):
+    """Full conformity report including history — used for the detail view."""
+    history = ConformityReportHistorySerializer(many=True, read_only=True)
+
+    class Meta(ConformityReportSerializer.Meta):
+        fields = ConformityReportSerializer.Meta.fields + ('history',)
+
 
 class ConformityReportCreateSerializer(serializers.Serializer):
-    """Create a conformity report — teacher selects student note + their own reference note."""
-    student_note_id = serializers.UUIDField(
+    """Create a conformity report — teacher selects student note + reference (uploaded note OR lesson doc)."""
+    student_note_id     = serializers.UUIDField(
         help_text="UUID of the student's READY note to evaluate."
     )
-    teacher_note_id = serializers.UUIDField(
-        help_text="UUID of the teacher's own READY reference note."
+    teacher_note_id     = serializers.UUIDField(
+        required=False,
+        help_text="UUID of the teacher's own READY uploaded note (alternative to teacher_lesson_doc_id)."
     )
+    teacher_lesson_doc_id = serializers.UUIDField(
+        required=False,
+        help_text="UUID of a distributed lesson document to use as reference (alternative to teacher_note_id)."
+    )
+
+    def validate(self, data):
+        if not data.get('teacher_note_id') and not data.get('teacher_lesson_doc_id'):
+            raise serializers.ValidationError(
+                'Provide either teacher_note_id or teacher_lesson_doc_id as the reference.'
+            )
+        return data
+
+
+class BulkConformitySerializer(serializers.Serializer):
+    """Request body for topic-level bulk conformity generation."""
+    subject = serializers.CharField(max_length=100)
+    topic   = serializers.CharField(max_length=200)
 
 
 class ConformityReportStatusSerializer(serializers.ModelSerializer):

@@ -60,11 +60,13 @@ class CreateQuizView(APIView):
         ser = CreateQuizSerializer(data=request.data, context={'request': request})
         ser.is_valid(raise_exception=True)
 
-        note = ser.context['note']
+        note        = ser.context['note']
+        lesson_doc  = ser.context.get('lesson_doc')
         quiz = Quiz.objects.create(
             owner=request.user,
             school=request.user.school,
             note=note,
+            lesson_doc=lesson_doc,
             title=f'Quiz: {note.file_name}',
             difficulty=ser.validated_data['difficulty'],
             num_questions=ser.validated_data['num_questions'],

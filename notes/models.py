@@ -68,6 +68,12 @@ class NoteUpload(TenantBoundModel):
     ocr_task_id = models.CharField(max_length=255, blank=True)
     ai_task_id = models.CharField(max_length=255, blank=True)
 
+    # Semantic embedding vector for AI-driven topic matching (stored as list of floats)
+    embedding = models.JSONField(null=True, blank=True)
+    # Which provider generated the embedding — critical for dimension safety
+    # (openai=1536 dims vs gemini=768 dims; cross-provider cosine similarity is invalid)
+    embedding_provider = models.CharField(max_length=20, blank=True)
+
     class Meta:
         db_table = 'notes_noteupload'
         ordering = ['-created_at']
@@ -99,8 +105,17 @@ class NoteConformityReport(TenantBoundModel):
     )
     teacher_note = models.ForeignKey(
         NoteUpload,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='conformity_reports_as_teacher',
+    )
+    teacher_lesson_doc = models.ForeignKey(
+        'teaching.LessonDocument',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='conformity_reports',
     )
     conformity_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     similarity_analysis = models.TextField(blank=True)
@@ -111,10 +126,39 @@ class NoteConformityReport(TenantBoundModel):
         db_index=True,
     )
     ai_task_id = models.CharField(max_length=255, blank=True)
+    matched_teacher_section = models.TextField(blank=True)
     generated_at = models.DateTimeField(auto_now_add=True)
+    last_run_at  = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'notes_conformityreport'
 
     def __str__(self):
         return f'Conformity {self.conformity_percentage}% [{self.status}] — {self.student_note}'
+
+    def snapshot_to_history(self):
+        """Save current DONE results to history before a re-run."""
+        if self.status == ConformityStatus.DONE:
+            run_number = self.history.count() + 1
+            ConformityReportHistory.objects.create(
+                report=self,
+                conformity_percentage=self.conformity_percentage,
+                similarity_analysis=self.similarity_analysis,
+                matched_teacher_section=self.matched_teacher_section,
+                run_number=run_number,
+            )
+
+
+class ConformityReportHistory(models.Model):
+    """Snapshot of a conformity report before each re-run."""
+    id                      = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    report                  = models.ForeignKey(NoteConformityReport, on_delete=models.CASCADE, related_name='history')
+    conformity_percentage   = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    similarity_analysis     = models.TextField(blank=True)
+    matched_teacher_section = models.TextField(blank=True)
+    run_number              = models.PositiveIntegerField(default=1)
+    snapshot_at             = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'notes_conformityreporthistory'
+        ordering = ['-snapshot_at']

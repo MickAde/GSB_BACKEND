@@ -66,6 +66,9 @@ class LessonDocument(TenantBoundModel):
     diagnostic_cards = models.JSONField(default=list)
     resource_cards   = models.JSONField(default=list)
 
+    # Combined OCR text from all uploaded files (generation_mode='upload')
+    raw_ocr_text  = models.TextField(blank=True)
+
     # Async generation state
     status           = models.CharField(
         max_length=20,
@@ -136,6 +139,28 @@ class LessonDocumentVersion(TimeStampedModel):
 
     def __str__(self):
         return f'v{self.version_number} — {self.document}'
+
+
+class LessonDocumentFile(TimeStampedModel):
+    """
+    One uploaded source file for a lesson document created via the 'upload' mode.
+    Multiple files are allowed; each is OCR'd and their text is concatenated.
+    """
+    id       = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(
+        LessonDocument,
+        on_delete=models.CASCADE,
+        related_name='uploaded_files',
+    )
+    file  = models.FileField(upload_to='lesson_docs/uploads/')
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = 'teaching_lessondocumentfile'
+        ordering = ['order', 'created_at']
+
+    def __str__(self):
+        return f'{self.file.name} (doc {self.document_id})'
 
 
 # ── Legacy models (kept for data continuity) ──────────────────────────────────

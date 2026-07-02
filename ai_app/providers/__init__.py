@@ -17,8 +17,6 @@ _REGISTRY: dict[str, str] = {
     'openai':      'ai_app.providers.openai.OpenAIProvider',
     'gemini':      'ai_app.providers.gemini.GeminiProvider',
     'perplexity':  'ai_app.providers.perplexity.PerplexityProvider',
-    'midjourney':  'ai_app.providers.midjourney.MidjourneyProvider',
-    'openrouter':  'ai_app.providers.openrouter.OpenRouterProvider',
 }
 
 

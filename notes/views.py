@@ -25,6 +25,7 @@ from .serializers import (
     BulkUploadResponseSerializer,
     ConfirmOCRSerializer,
     ConformityReportCreateSerializer,
+    ConformityReportDetailSerializer,
     ConformityReportSerializer,
     ConformityReportStatusSerializer,
     NoteDetailSerializer,
@@ -632,7 +633,11 @@ class SchoolNoteListView(APIView):
 
         subject = request.query_params.get('subject', '').strip()
         if subject:
-            qs = qs.filter(subject__icontains=subject)
+            qs = qs.filter(subject__iexact=subject)
+
+        topic = request.query_params.get('topic', '').strip()
+        if topic:
+            qs = qs.filter(topic__iexact=topic)
 
         note_status = request.query_params.get('status', '').strip()
         if note_status:
@@ -919,19 +924,30 @@ class NoteConformityListCreateView(APIView):
     def get(self, request):
         from users.models import UserRole
         qs = NoteConformityReport.objects.select_related(
-            'student_note__owner', 'teacher_note'
+            'student_note__owner', 'teacher_note', 'teacher_lesson_doc'
         ).order_by('-generated_at')
 
         if request.user.role == UserRole.STUDENT:
-            # Students only see conformity reports for their own notes.
             qs = qs.filter(student_note__owner=request.user)
         elif request.user.role == UserRole.TEACHER:
-            qs = qs.filter(teacher_note__owner=request.user)
+            # Reports created by this teacher — reference may be an uploaded note OR a lesson doc
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(teacher_note__owner=request.user) | Q(teacher_lesson_doc__teacher=request.user)
+            )
         # Admins see all (no additional filter)
 
         student_note_id = request.query_params.get('student_note', '').strip()
         if student_note_id:
             qs = qs.filter(student_note_id=student_note_id)
+
+        subject = request.query_params.get('subject', '').strip()
+        if subject:
+            qs = qs.filter(teacher_lesson_doc__subject__iexact=subject)
+
+        topic = request.query_params.get('topic', '').strip()
+        if topic:
+            qs = qs.filter(teacher_lesson_doc__topic__iexact=topic)
 
         paginator = StandardResultsPagination()
         page = paginator.paginate_queryset(qs, request, view=self)
@@ -967,8 +983,9 @@ class NoteConformityListCreateView(APIView):
         serializer = ConformityReportCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        student_note_id = serializer.validated_data['student_note_id']
-        teacher_note_id = serializer.validated_data['teacher_note_id']
+        student_note_id       = serializer.validated_data['student_note_id']
+        teacher_note_id       = serializer.validated_data.get('teacher_note_id')
+        teacher_lesson_doc_id = serializer.validated_data.get('teacher_lesson_doc_id')
 
         # Student note must exist in the school and be READY
         try:
@@ -992,24 +1009,43 @@ class NoteConformityListCreateView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        # Teacher note must belong to the requesting teacher and be READY
-        try:
-            teacher_note = NoteUpload.objects.get(pk=teacher_note_id, owner=request.user)
-        except NoteUpload.DoesNotExist:
-            return Response(
-                {'error_code': 'NOT_FOUND', 'detail': 'Teacher note not found or does not belong to you.', 'status_code': 404},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        if teacher_note.status != NoteStatus.READY:
-            return Response(
-                {'error_code': 'INVALID_STATE', 'detail': 'Teacher note must be in READY state.', 'status_code': 409},
-                status=status.HTTP_409_CONFLICT,
-            )
+        teacher_note       = None
+        teacher_lesson_doc = None
+
+        if teacher_lesson_doc_id:
+            from teaching.models import LessonDocument
+            try:
+                teacher_lesson_doc = LessonDocument.objects.get(
+                    pk=teacher_lesson_doc_id,
+                    teacher=request.user,
+                    distributed_to_class=True,
+                    doc_type='note',
+                )
+            except LessonDocument.DoesNotExist:
+                return Response(
+                    {'error_code': 'NOT_FOUND', 'detail': 'Lesson doc not found or not distributed.', 'status_code': 404},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            # Teacher note must belong to the requesting teacher and be READY
+            try:
+                teacher_note = NoteUpload.objects.get(pk=teacher_note_id, owner=request.user)
+            except NoteUpload.DoesNotExist:
+                return Response(
+                    {'error_code': 'NOT_FOUND', 'detail': 'Teacher note not found or does not belong to you.', 'status_code': 404},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if teacher_note.status != NoteStatus.READY:
+                return Response(
+                    {'error_code': 'INVALID_STATE', 'detail': 'Teacher note must be in READY state.', 'status_code': 409},
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         report = NoteConformityReport.objects.create(
             school=request.user.school,
             student_note=student_note,
             teacher_note=teacher_note,
+            teacher_lesson_doc=teacher_lesson_doc,
         )
 
         from ai_app.tasks import run_conformity_analysis
@@ -1046,9 +1082,14 @@ class NoteConformityDetailView(APIView):
     )
     def get(self, request, pk):
         from users.models import UserRole
-        qs = NoteConformityReport.objects.select_related('student_note__owner', 'teacher_note')
+        from django.db.models import Q
+        qs = NoteConformityReport.objects.select_related(
+            'student_note__owner', 'teacher_note', 'teacher_lesson_doc'
+        ).prefetch_related('history')
         if request.user.role == UserRole.TEACHER:
-            qs = qs.filter(teacher_note__owner=request.user)
+            qs = qs.filter(
+                Q(teacher_note__owner=request.user) | Q(teacher_lesson_doc__teacher=request.user)
+            )
         try:
             report = qs.get(pk=pk)
         except NoteConformityReport.DoesNotExist:
@@ -1056,7 +1097,7 @@ class NoteConformityDetailView(APIView):
                 {'error_code': 'NOT_FOUND', 'detail': 'Conformity report not found.', 'status_code': 404},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        return Response(ConformityReportSerializer(report).data)
+        return Response(ConformityReportDetailSerializer(report).data)
 
 
 @extend_schema(tags=['Notes — Conformity'])
@@ -1082,9 +1123,12 @@ class NoteConformityStatusView(APIView):
     )
     def get(self, request, pk):
         from users.models import UserRole
+        from django.db.models import Q
         qs = NoteConformityReport.objects.all()
         if request.user.role == UserRole.TEACHER:
-            qs = qs.filter(teacher_note__owner=request.user)
+            qs = qs.filter(
+                Q(teacher_note__owner=request.user) | Q(teacher_lesson_doc__teacher=request.user)
+            )
         try:
             report = qs.get(pk=pk)
         except NoteConformityReport.DoesNotExist:
@@ -1093,3 +1137,195 @@ class NoteConformityStatusView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         return Response(ConformityReportStatusSerializer(report).data)
+
+
+@extend_schema(tags=['Notes — Conformity'])
+class ConformityTopicsView(APIView):
+    """
+    GET /api/v1/notes/conformity/topics/
+
+    Returns the teacher's distributed lesson docs as subject+topic options,
+    each annotated with how many READY student notes exist for that combination
+    in the teacher's class.
+
+    **Allowed roles:** TEACHER only.
+    """
+    permission_classes = [IsTeacher]
+
+    def get(self, request):
+        from users.models import UserRole
+        from teaching.models import LessonDocument, LessonDocumentStatus, LessonDocumentType
+        from django.db.models import Count, Q
+        from .models import ConformityStatus
+
+        if request.user.role != UserRole.TEACHER:
+            return Response(
+                {'error_code': 'FORBIDDEN', 'detail': 'Only teachers can access this endpoint.', 'status_code': 403},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        docs = LessonDocument.objects.filter(
+            teacher=request.user,
+            doc_type=LessonDocumentType.NOTE,
+            status=LessonDocumentStatus.DISTRIBUTED,
+        ).order_by('subject', 'topic')
+
+        class_id = getattr(request.user, 'student_class_id', None)
+
+        results = []
+        for doc in docs:
+            note_count    = 0
+            report_count  = 0
+            if class_id:
+                student_notes_qs = NoteUpload.objects.filter(
+                    owner__student_class_id=class_id,
+                    owner__role=UserRole.STUDENT,
+                    subject__iexact=doc.subject,
+                    topic__iexact=doc.topic,
+                    status=NoteStatus.READY,
+                )
+                note_count   = student_notes_qs.count()
+                report_count = NoteConformityReport.objects.filter(
+                    teacher_lesson_doc=doc,
+                    student_note__in=student_notes_qs,
+                    status=ConformityStatus.DONE,
+                ).count()
+            results.append({
+                'subject':              doc.subject,
+                'topic':                doc.topic,
+                'lesson_doc_id':        str(doc.id),
+                'lesson_doc_title':     doc.title or doc.topic,
+                'student_note_count':   note_count,
+                'existing_report_count': report_count,
+            })
+
+        return Response(results)
+
+
+@extend_schema(tags=['Notes — Conformity'])
+class NoteConformityBulkView(APIView):
+    """
+    POST /api/v1/notes/conformity/bulk/
+
+    Auto-generates conformity reports for ALL READY student notes in the
+    teacher's class that match a given subject + topic, using the teacher's
+    most recently distributed lesson doc for that combination as the reference.
+
+    Already-existing reports (same lesson doc + student note) are skipped.
+
+    **Allowed roles:** TEACHER only.
+    """
+    permission_classes = [IsTeacher]
+
+    def post(self, request):
+        from users.models import UserRole
+        from teaching.models import LessonDocument, LessonDocumentStatus, LessonDocumentType
+        from ai_app.tasks import run_conformity_analysis
+        from .models import ConformityStatus
+
+        if request.user.role != UserRole.TEACHER:
+            return Response(
+                {'error_code': 'FORBIDDEN', 'detail': 'Only teachers can create conformity reports.', 'status_code': 403},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from .serializers import BulkConformitySerializer
+        ser = BulkConformitySerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        subject = ser.validated_data['subject']
+        topic   = ser.validated_data['topic']
+
+        # Find the most recently distributed lesson doc for this subject+topic
+        lesson_doc = LessonDocument.objects.filter(
+            teacher=request.user,
+            doc_type=LessonDocumentType.NOTE,
+            status=LessonDocumentStatus.DISTRIBUTED,
+            subject__iexact=subject,
+            topic__iexact=topic,
+        ).order_by('-distributed_at').first()
+
+        if not lesson_doc:
+            return Response(
+                {'error_code': 'NOT_FOUND', 'detail': 'No distributed lesson note found for this subject and topic.', 'status_code': 404},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        class_id = getattr(request.user, 'student_class_id', None)
+        if not class_id:
+            return Response(
+                {'error_code': 'NO_CLASS', 'detail': 'Your account is not assigned to a class.', 'status_code': 400},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        student_notes = list(NoteUpload.objects.filter(
+            owner__student_class_id=class_id,
+            owner__role=UserRole.STUDENT,
+            subject__iexact=subject,
+            topic__iexact=topic,
+            status=NoteStatus.READY,
+        ).select_related('owner'))
+
+        if not student_notes:
+            return Response(
+                {'error_code': 'NO_NOTES', 'detail': 'No READY student notes found for this subject and topic.', 'status_code': 404},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Fetch any existing reports for this lesson doc + these student notes
+        existing_reports = {
+            r.student_note_id: r
+            for r in NoteConformityReport.objects.filter(
+                teacher_lesson_doc=lesson_doc,
+                student_note__in=student_notes,
+            )
+        }
+
+        created_ids  = []
+        refreshed_ids = []
+        skipped      = 0  # already running
+
+        with transaction.atomic():
+            for note in student_notes:
+                existing = existing_reports.get(note.id)
+
+                if existing:
+                    if existing.status in (ConformityStatus.PENDING, ConformityStatus.PROCESSING):
+                        # Already in progress — leave it alone
+                        skipped += 1
+                        continue
+                    # Snapshot old results to history, then reset and re-run
+                    existing.snapshot_to_history()
+                    NoteConformityReport.objects.filter(pk=existing.pk).update(
+                        status=ConformityStatus.PENDING,
+                        conformity_percentage=0,
+                        similarity_analysis='',
+                        matched_teacher_section='',
+                        ai_task_id='',
+                    )
+                    celery_result = run_conformity_analysis.apply_async(args=[str(existing.id)], queue='celery_ai')
+                    NoteConformityReport.objects.filter(pk=existing.pk).update(ai_task_id=celery_result.id)
+                    refreshed_ids.append(str(existing.id))
+                else:
+                    report = NoteConformityReport.objects.create(
+                        school=request.user.school,
+                        student_note=note,
+                        teacher_lesson_doc=lesson_doc,
+                    )
+                    celery_result = run_conformity_analysis.apply_async(args=[str(report.id)], queue='celery_ai')
+                    report.ai_task_id = celery_result.id
+                    report.save(update_fields=['ai_task_id'])
+                    created_ids.append(str(report.id))
+
+        logger.info(
+            'Teacher %s bulk-created %d / refreshed %d conformity reports for %s / %s.',
+            request.user.id, len(created_ids), len(refreshed_ids), subject, topic,
+        )
+        return Response(
+            {
+                'created':       len(created_ids),
+                'refreshed':     len(refreshed_ids),
+                'skipped':       skipped,
+                'report_ids':    created_ids + refreshed_ids,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )

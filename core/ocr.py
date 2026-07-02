@@ -7,7 +7,7 @@ Strategy by note_type:
           → Tesseract fallback  (if no AI key configured)
   image → AI Vision first  (handles pencil, children's handwriting, low contrast)
           → Tesseract fallback
-  voice → stub  (Phase 3+, needs Whisper / Google STT)
+  voice → AI transcription (uses AI_AUDIO_PROVIDER: openai Whisper or gemini)
   text  → pass-through
 
 AI Vision priority: OpenAI (GPT-4o) → Anthropic (Claude) → Gemini
@@ -111,33 +111,40 @@ def _extract_image(image_bytes: bytes) -> str:
 
 def _vision_transcribe(image_bytes: bytes) -> str:
     """
-    Send the image to a multimodal AI model for transcription.
+    Send the image to the configured AI_VISION_PROVIDER for transcription.
 
-    GPT-4o Vision is the default for all image/handwriting OCR — it achieves
-    90-100% accuracy on pencil writing and children's handwriting.
-    Falls back to Claude, then Gemini, if GPT-4o is unavailable.
-    Returns empty string if all providers fail or no keys are configured.
+    Set AI_VISION_PROVIDER in .env.local to choose the provider:
+      anthropic  →  Claude Vision  (default)
+      openai     →  GPT-4o Vision
+      gemini     →  Gemini Vision
+
+    Returns empty string if the provider is misconfigured or the call fails.
     """
     from django.conf import settings
 
-    # Vision provider order is fixed: GPT-4o first, regardless of AI_DEFAULT_TEXT_PROVIDER.
-    # GPT-4o is the benchmark for handwriting transcription accuracy.
-    providers = [
-        (_openai_vision,    'OPENAI_API_KEY',    'GPT-4o Vision'),
-        (_anthropic_vision, 'ANTHROPIC_API_KEY', 'Claude Vision'),
-        (_gemini_vision,    'GEMINI_API_KEY',    'Gemini Vision'),
-    ]
+    _provider_map = {
+        'anthropic': ('ANTHROPIC_API_KEY', _anthropic_vision, 'Claude Vision'),
+        'openai':    ('OPENAI_API_KEY',    _openai_vision,    'GPT-4o Vision'),
+        'gemini':    ('GEMINI_API_KEY',    _gemini_vision,    'Gemini Vision'),
+    }
 
-    for fn, key_attr, label in providers:
-        if not getattr(settings, key_attr, ''):
-            continue
-        logger.info('Using %s for image transcription.', label)
-        text = fn(image_bytes)
-        if text:
-            return text
-        logger.warning('%s returned empty — trying next provider.', label)
+    name = getattr(settings, 'AI_VISION_PROVIDER', 'anthropic').lower()
+    entry = _provider_map.get(name)
+    if not entry:
+        logger.error(
+            'Unknown AI_VISION_PROVIDER="%s". Valid options: anthropic, openai, gemini.', name
+        )
+        return ''
 
-    return ''
+    key_attr, fn, label = entry
+    if not getattr(settings, key_attr, ''):
+        logger.error(
+            'AI_VISION_PROVIDER=%s but %s is not set in your environment.', name, key_attr
+        )
+        return ''
+
+    logger.info('Using %s for image transcription.', label)
+    return fn(image_bytes)
 
 
 def _anthropic_vision(image_bytes: bytes) -> str:
@@ -252,27 +259,38 @@ def _detect_media_type(image_bytes: bytes) -> str:
 
 def _transcribe_audio(audio_bytes: bytes) -> str:
     """
-    Transcribe audio using AI APIs.
+    Transcribe audio using the configured AI provider.
 
-    Priority:
-      1. OpenAI Whisper — purpose-built for speech-to-text, best accuracy
-      2. Gemini — multimodal, supports audio natively
-    Returns empty string if no provider is configured; student can type manually.
+    Set AI_AUDIO_PROVIDER in .env.local to choose the provider:
+      openai  →  Whisper  (default — best accuracy for speech-to-text)
+      gemini  →  Gemini Audio
+
+    Returns empty string if misconfigured; student can type manually.
     """
     from django.conf import settings
 
-    if getattr(settings, 'OPENAI_API_KEY', ''):
-        text = _whisper_transcribe(audio_bytes)
-        if text:
-            return text
+    _provider_map = {
+        'openai': ('OPENAI_API_KEY', _whisper_transcribe, 'OpenAI Whisper'),
+        'gemini': ('GEMINI_API_KEY', _gemini_audio_transcribe, 'Gemini Audio'),
+    }
 
-    if getattr(settings, 'GEMINI_API_KEY', ''):
-        text = _gemini_audio_transcribe(audio_bytes)
-        if text:
-            return text
+    name = getattr(settings, 'AI_AUDIO_PROVIDER', 'openai').lower()
+    entry = _provider_map.get(name)
+    if not entry:
+        logger.error(
+            'Unknown AI_AUDIO_PROVIDER="%s". Valid options: openai, gemini.', name
+        )
+        return ''
 
-    logger.warning('No audio AI provider configured — student will review manually.')
-    return ''
+    key_attr, fn, label = entry
+    if not getattr(settings, key_attr, ''):
+        logger.error(
+            'AI_AUDIO_PROVIDER=%s but %s is not set in your environment.', name, key_attr
+        )
+        return ''
+
+    logger.info('Using %s for audio transcription.', label)
+    return fn(audio_bytes)
 
 
 def _detect_audio_mime(audio_bytes: bytes) -> tuple[str, str]:

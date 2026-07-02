@@ -27,13 +27,22 @@ class GeminiProvider(AIProvider):
             model=model_name,
         )
 
+    def generate_embedding(self, text: str) -> list[float]:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        result = genai.embed_content(
+            model='models/text-embedding-004',
+            content=text[:8000],
+        )
+        return result['embedding']
+
     def compare_notes(self, student_text: str, teacher_text: str, subject_context: str = '') -> ConformityResult:
         model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
         response = self._model(model_name).generate_content(
             self._build_conformity_prompt(student_text, teacher_text, subject_context)
         )
-        percentage, analysis = self._parse_conformity_response(response.text)
-        return ConformityResult(percentage=percentage, analysis=analysis, provider=self.name, model=model_name)
+        percentage, analysis, matched_section = self._parse_conformity_response(response.text)
+        return ConformityResult(percentage=percentage, analysis=analysis, matched_section=matched_section, provider=self.name, model=model_name)
 
     def generate_quiz_questions(self, text: str, num_questions: int, difficulty: str) -> QuizResult:
         model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
@@ -56,12 +65,22 @@ class GeminiProvider(AIProvider):
         self, doc_type, curriculum_type, subject, topic, subtopic,
         class_level, term, week, additional_context='',
     ) -> LessonDocumentResult:
+        import google.generativeai as genai
         model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-1.5-flash')
         prompt = self._build_lesson_document_prompt(
             doc_type, curriculum_type, subject, topic, subtopic,
             class_level, term, week, additional_context,
         )
-        response = self._model(model_name).generate_content(prompt)
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        # JSON mode + higher token cap prevents truncated or non-JSON responses
+        model = genai.GenerativeModel(
+            model_name,
+            generation_config=genai.GenerationConfig(
+                response_mime_type='application/json',
+                max_output_tokens=8192,
+            ),
+        )
+        response = model.generate_content(prompt)
         data = self._parse_lesson_document_response(response.text)
         return LessonDocumentResult(
             title=data.get('title', ''),

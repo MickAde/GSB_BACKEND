@@ -33,6 +33,7 @@ class SearchResult:
 class ConformityResult:
     percentage: float
     analysis: str
+    matched_section: str  # the N_t' portion of teacher note actually used for scoring
     provider: str
     model: str
 
@@ -91,6 +92,12 @@ class AIProvider(ABC):
             f'Use "perplexity" for search tasks.'
         )
 
+    def generate_embedding(self, text: str) -> list[float]:
+        raise NotImplementedError(
+            f'Provider "{self.name}" does not support embedding generation. '
+            f'Use "openai" (text-embedding-3-small) or "gemini" (text-embedding-004) instead.'
+        )
+
     def compare_notes(self, student_text: str, teacher_text: str, subject_context: str = '') -> ConformityResult:
         raise NotImplementedError(
             f'Provider "{self.name}" does not support conformity analysis. '
@@ -147,17 +154,10 @@ class AIProvider(ABC):
             'NERDC (Nigerian Educational Research and Development Council) curriculum.\n'
             '- Use Bloom\'s taxonomy action verbs ONLY for objectives: identify, state, list, name, describe, '
             'explain, define, compare, contrast, demonstrate, solve, apply, calculate, evaluate, analyse, synthesise, predict, justify.\n'
+            '- Each learning objective must begin with a Bloom\'s verb and be measurable.\n'
             '- Use Nigerian currency ₦ in all money examples.\n'
             '- Use Nigerian names (e.g. Amaka, Emeka, Bola, Chidi, Ngozi, Yusuf) and local contexts.\n'
             '- Reference Nigerian foods (jollof rice, eba, egusi, yam), cities (Lagos, Abuja, Kano, Port Harcourt).\n'
-            '- Lesson Plan MUST include all these sections in order: Learning Objectives, Entry Behaviour, '
-            'Materials/Resources, Set Induction, Presentation (numbered steps with Teacher Activity / Student Activity), '
-            'Generalisation, Evaluation (4–6 questions), Assignment.\n'
-            '- Lesson Note MUST include: Learning Objectives, Introduction, Main Content (with numbered sub-sections), '
-            'Key Points Summary, Practice Exercises (5+ questions), Further Reading.\n'
-            '- Each learning objective must begin with a Bloom\'s verb and be measurable.\n'
-            '- Set Induction must be an engaging real-life hook relevant to Nigerian students.\n'
-            '- Presentation steps must be granular: each step has a Teacher Activity and Student Activity.\n'
         ),
         'british': (
             'British / Cambridge National Curriculum.\n'
@@ -191,6 +191,27 @@ class AIProvider(ABC):
         ),
     }
 
+    # Required Markdown section structure per doc type — AI must follow this exactly.
+    _PLAN_SECTIONS = (
+        '## Learning Objectives\n'
+        '## Entry Behaviour\n'
+        '## Instructional Materials\n'
+        '## Set Induction\n'
+        '## Presentation\n'
+        '## Generalisation\n'
+        '## Evaluation\n'
+        '## Assignment\n'
+    )
+
+    _NOTE_SECTIONS = (
+        '## Introduction\n'
+        '## Main Content\n'
+        '## Worked Examples\n'
+        '## Practice Exercises\n'
+        '## Key Points Summary\n'
+        '## Further Reading\n'
+    )
+
     def _build_lesson_document_prompt(
         self,
         doc_type: str,
@@ -204,13 +225,46 @@ class AIProvider(ABC):
         additional_context: str = '',
     ) -> str:
         curriculum_rules = self._CURRICULUM_RULES.get(curriculum_type, self._CURRICULUM_RULES['nerdc'])
-        doc_label  = 'Lesson Plan' if doc_type == 'plan' else 'Lesson Note'
+        is_plan    = doc_type == 'plan'
+        doc_label  = 'Lesson Plan' if is_plan else 'Lesson Note'
         term_label = f'{term}{"st" if term == 1 else "nd" if term == 2 else "rd"} Term'
         ctx = f'\n\nAdditional teacher notes:\n{additional_context}' if additional_context.strip() else ''
+        required_sections = self._PLAN_SECTIONS if is_plan else self._NOTE_SECTIONS
+
+        if is_plan:
+            doc_instructions = (
+                'This is a LESSON PLAN — a structured teaching guide for the teacher to follow in class.\n'
+                'It describes HOW to teach the lesson, not the lesson content itself.\n'
+                'Focus on: objectives, activities, timing, teacher actions, student interactions, assessment.\n\n'
+                f'REQUIRED SECTIONS (use exactly these ## headings in this order):\n{required_sections}\n'
+                'Section guidance:\n'
+                '- Learning Objectives: 3-5 measurable objectives using Bloom\'s taxonomy verbs.\n'
+                '- Entry Behaviour: What students already know / prerequisite concepts.\n'
+                '- Instructional Materials: List all materials, charts, equipment needed.\n'
+                '- Set Induction: Engaging opening hook (real-life story, question, or demonstration).\n'
+                '- Presentation: Step-by-step teaching sequence. Each step has Teacher Activity and Student Activity.\n'
+                '- Generalisation: Key conclusions / general principles students should derive.\n'
+                '- Evaluation: 4-6 assessment questions to check understanding.\n'
+                '- Assignment: Homework task for students to complete after class.\n'
+            )
+        else:
+            doc_instructions = (
+                'This is a LESSON NOTE — a detailed content document covering the subject matter.\n'
+                'It explains the topic thoroughly, provides examples, and includes practice questions.\n'
+                'Focus on: clear explanations, real-world examples, step-by-step workings, exercises.\n\n'
+                f'REQUIRED SECTIONS (use exactly these ## headings in this order):\n{required_sections}\n'
+                'Section guidance:\n'
+                '- Introduction: Brief overview of the topic and why it matters to students.\n'
+                '- Main Content: Detailed, thorough explanation of the topic with sub-sections (### headings) for each concept.\n'
+                '- Worked Examples: 3-5 fully solved problems or scenarios showing the concept in action.\n'
+                '- Practice Exercises: 8-12 varied questions (easy → hard) for students to attempt.\n'
+                '- Key Points Summary: Bullet-point recap of the essential facts, formulas, or definitions.\n'
+                '- Further Reading: Books, topics, or areas for students who want to learn more.\n'
+            )
 
         return (
             f'You are an expert {curriculum_type.upper()} curriculum designer creating a professional {doc_label}.\n\n'
-            f'CURRICULUM RULES:\n{curriculum_rules}\n'
+            f'CURRICULUM RULES:\n{curriculum_rules}\n\n'
             f'DOCUMENT DETAILS:\n'
             f'- Type: {doc_label}\n'
             f'- Subject: {subject}\n'
@@ -218,12 +272,12 @@ class AIProvider(ABC):
             f'- Sub-topic: {subtopic or "N/A"}\n'
             f'- Class Level: {class_level}\n'
             f'- Term: {term_label}, Week {week}{ctx}\n\n'
-            'Generate a complete, professional, curriculum-compliant document in Markdown.\n\n'
+            f'{doc_instructions}\n'
             'DIAGNOSTIC CARDS: Generate 3–6 diagnostic cards reviewing your own output.\n'
             '  Red (urgency="red"): compliance failures — missing mandatory sections, unmeasurable objectives, wrong currency.\n'
             '  Yellow (urgency="yellow"): improvement opportunities — better localisation, stronger hooks, richer examples.\n'
-            '  Each card: {id, urgency, title, description, section (markdown heading it refers to), '
-            'suggestion, suggested_content (replacement text if applicable, else null)}.\n\n'
+            '  Each card MUST have: {id, urgency, title, description, section (the exact ## heading text this card refers to), '
+            'suggestion (one sentence of advice), suggested_content (REQUIRED — write the full improved Markdown text for that section that the teacher can apply directly; never null)}.\n\n'
             'RESOURCE CARDS: Generate 2–4 resource suggestions.\n'
             '  Types: "video", "textbook", "past_questions", "website".\n'
             '  Each card: {id, type, title, description, relevance}.\n'
@@ -236,7 +290,12 @@ class AIProvider(ABC):
             '  "diagnostic_cards": [...],\n'
             '  "resource_cards": [...]\n'
             '}\n'
-            'Do not include any text outside the JSON object.'
+            'CRITICAL JSON RULES — violations will cause a parse error:\n'
+            '- Escape all backslashes as \\\\ (double backslash)\n'
+            '- Escape all double quotes inside string values as \\"\n'
+            '- Use \\n for line breaks inside string values — never literal newlines\n'
+            '- Do not include any text, markdown fences, or comments outside the JSON object\n'
+            '- The entire response must be parseable by json.loads() with no pre-processing'
         )
 
     def _build_section_regeneration_prompt(
@@ -263,13 +322,61 @@ class AIProvider(ABC):
         )
 
     def _parse_lesson_document_response(self, raw: str) -> dict:
-        cleaned = raw.strip()
-        if cleaned.startswith('```'):
-            lines = cleaned.splitlines()
-            cleaned = '\n'.join(lines[1:])
-            if cleaned.strip().endswith('```'):
-                cleaned = cleaned.strip()[:-3].strip()
-        return json.loads(cleaned)
+        if not raw:
+            raise json.JSONDecodeError('Empty response from AI provider', '', 0)
+
+        # Strip outer whitespace and BOM (byte-order mark Gemini sometimes emits)
+        cleaned = raw.strip().lstrip('﻿')
+
+        # Strip markdown fences wherever they appear — not just at position 0.
+        # Handles cases like "Here is the plan:\n```json\n{...}\n```"
+        if '```' in cleaned:
+            first = cleaned.find('```')
+            last  = cleaned.rfind('```')
+            if first != last:          # at least two fence markers found
+                between = cleaned[first + 3: last]
+                lines   = between.splitlines()
+                # First line may be a language tag like "json" — drop it
+                if lines and re.match(r'^\s*[a-z]+\s*$', lines[0]):
+                    between = '\n'.join(lines[1:])
+                cleaned = between.strip()
+
+        # Extract the JSON object — handles any preamble or postamble text
+        # and the case where Gemini emits double-opening braces or stray chars.
+        start = cleaned.find('{')
+        end   = cleaned.rfind('}')
+        if start >= 0 and end > start:
+            cleaned = cleaned[start: end + 1]
+
+        # Fast path — well-formed JSON
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Repair 1: lone backslashes not part of a valid JSON escape sequence.
+        # Markdown often contains \n, \t, \( etc. that the AI forgets to double.
+        repaired = re.sub(r'\\(?!["\\/bfnrtu0-9])', r'\\\\', cleaned)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Repair 2: literal control characters (real tabs / newlines) inside
+        # string values — replace them with their JSON escape equivalents.
+        repaired = re.sub(
+            r'(?<=[^\\])([\x00-\x1f])',
+            lambda m: {'\n': '\\n', '\r': '\\r', '\t': '\\t'}.get(m.group(1), ''),
+            repaired,
+        )
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as exc:
+            raise json.JSONDecodeError(
+                f'AI lesson document JSON could not be repaired '
+                f'(original error at char {exc.pos}): {exc.msg}',
+                exc.doc, exc.pos,
+            ) from exc
 
     # ── Shared utilities used by every text provider ──────────────
 
@@ -319,20 +426,36 @@ class AIProvider(ABC):
     def _build_conformity_prompt(self, student_text: str, teacher_text: str, subject_context: str = '') -> str:
         ctx = f'Subject context: {subject_context}\n\n' if subject_context else ''
         return (
-            'You are an educational quality-control assistant.\n'
-            'Compare a student\'s notes against a teacher\'s reference material and evaluate '
-            'how well the student captured the key information.\n\n'
+            'You are an educational quality-control assistant evaluating a student\'s notes.\n\n'
+            'CRITICAL RULE: The student may have only written a PORTION of the teacher\'s full '
+            'notes because the teacher may still be covering this topic in class. '
+            'You MUST NOT penalise the student for content that appears in the teacher\'s notes '
+            'beyond what the student has uploaded — they have not been taught that part yet.\n\n'
+            'Your task:\n'
+            '1. Identify the LAST concept or section that appears in the student\'s notes (their "stopping point").\n'
+            '2. Extract from the teacher\'s notes ONLY the content from the beginning up to and '
+            'including that stopping point. This subset is called N_t\'.\n'
+            '3. Score the student\'s notes ONLY against N_t\'. Ignore everything in the teacher\'s '
+            'notes that comes after the stopping point.\n'
+            '   Score formula: (content accurately captured by student / total content in N_t\') × 100\n\n'
             f'{ctx}'
-            '--- TEACHER REFERENCE MATERIAL ---\n'
+            '--- TEACHER\'S MASTER NOTES (full document) ---\n'
             f'{teacher_text}\n\n'
-            '--- STUDENT NOTES ---\n'
+            '--- STUDENT\'S NOTES (partial upload) ---\n'
             f'{student_text}\n\n'
-            'Respond using EXACTLY these two section headers (no other text before them):\n\n'
+            'Respond using EXACTLY these four section headers in this order '
+            '(no other text before the first header):\n\n'
+            'STOPPING_POINT:\n'
+            '<One sentence identifying the last concept/section the student covered.>\n\n'
+            'RELEVANT_TEACHER_SECTION:\n'
+            '<Copy the exact text from the teacher\'s notes covering from the beginning up to '
+            'and including the stopping point. This is N_t\'.>\n\n'
             'CONFORMITY_PERCENTAGE:\n'
-            '<A single integer from 0 to 100 — the conformity percentage.>\n\n'
+            '<A single integer from 0 to 100.>\n\n'
             'SIMILARITY_ANALYSIS:\n'
-            '<3-5 sentences: what the student captured well, what is missing, '
-            'and one actionable improvement suggestion.>'
+            '<3-5 sentences: what the student captured well from the relevant section, '
+            'what key points are missing from the relevant section, '
+            'and one specific actionable improvement suggestion.>'
         )
 
     def _build_quiz_prompt(self, text: str, num_questions: int, difficulty: str) -> str:
@@ -390,26 +513,38 @@ class AIProvider(ABC):
             'Keep feedback constructive, specific, and actionable. Do not rewrite the plan.'
         )
 
-    def _parse_conformity_response(self, text: str) -> tuple[float, str]:
-        in_pct      = False
-        in_analysis = False
-        pct_lines: list[str]      = []
+    def _parse_conformity_response(self, text: str) -> tuple[float, str, str]:
+        in_stopping  = False
+        in_section   = False
+        in_pct       = False
+        in_analysis  = False
+
+        stopping_lines: list[str] = []
+        section_lines:  list[str] = []
+        pct_lines:      list[str] = []
         analysis_lines: list[str] = []
 
         for line in text.splitlines():
             stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith('CONFORMITY_PERCENTAGE:') or stripped == 'CONFORMITY_PERCENTAGE':
-                in_pct      = True
-                in_analysis = False
+            if stripped.startswith('STOPPING_POINT:') or stripped == 'STOPPING_POINT':
+                in_stopping = True; in_section = in_pct = in_analysis = False
+            elif stripped.startswith('RELEVANT_TEACHER_SECTION:') or stripped == 'RELEVANT_TEACHER_SECTION':
+                in_section = True; in_stopping = in_pct = in_analysis = False
+            elif stripped.startswith('CONFORMITY_PERCENTAGE:') or stripped == 'CONFORMITY_PERCENTAGE':
+                in_pct = True; in_stopping = in_section = in_analysis = False
             elif stripped.startswith('SIMILARITY_ANALYSIS:') or stripped == 'SIMILARITY_ANALYSIS':
-                in_pct      = False
-                in_analysis = True
+                in_analysis = True; in_stopping = in_section = in_pct = False
+            elif in_stopping:
+                if stripped:
+                    stopping_lines.append(stripped)
+            elif in_section:
+                section_lines.append(line)  # preserve original spacing for teacher section
             elif in_pct:
-                pct_lines.append(stripped)
+                if stripped:
+                    pct_lines.append(stripped)
             elif in_analysis:
-                analysis_lines.append(stripped)
+                if stripped:
+                    analysis_lines.append(stripped)
 
         pct_str = ' '.join(pct_lines).strip()
         match = re.search(r'(\d+(?:\.\d+)?)', pct_str)
@@ -419,5 +554,6 @@ class AIProvider(ABC):
             pct = 0.0
         pct = max(0.0, min(100.0, pct))
 
+        matched_section = '\n'.join(section_lines).strip()
         analysis = ' '.join(analysis_lines).strip()
-        return pct, analysis
+        return pct, analysis, matched_section

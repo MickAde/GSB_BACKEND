@@ -4,23 +4,107 @@ from celery.exceptions import MaxRetriesExceededError
 
 logger = logging.getLogger(__name__)
 
+# Minimum cosine similarity required to consider two notes as covering the same topic.
+EMBEDDING_MATCH_THRESHOLD = 0.65
 
+
+# ── Embedding helpers ─────────────────────────────────────────────────────────
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Pure-Python cosine similarity — no numpy required."""
+    dot   = sum(x * y for x, y in zip(a, b))
+    mag_a = sum(x * x for x in a) ** 0.5
+    mag_b = sum(y * y for y in b) ** 0.5
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _find_best_matching_note(source_note, candidate_qs):
+    """
+    Return the candidate note that best matches source_note semantically.
+
+    Uses cosine similarity of stored embeddings when available.
+    Falls back to returning the most recent candidate when:
+    - source note has no embedding, OR
+    - no candidate has an embedding yet (e.g. existing notes pre-migration)
+
+    Cross-provider embeddings (openai 1536-dim vs gemini 768-dim) are skipped
+    to prevent silently wrong similarity scores.
+    """
+    if not source_note.embedding:
+        return candidate_qs.first()
+
+    source_provider   = source_note.embedding_provider or ''
+    best_note         = None
+    best_score        = EMBEDDING_MATCH_THRESHOLD
+    any_had_embedding = False
+
+    for candidate in candidate_qs:
+        if not candidate.embedding:
+            continue
+        # Skip cross-provider comparison — different dimensions give invalid scores
+        cand_provider = candidate.embedding_provider or ''
+        if source_provider and cand_provider and source_provider != cand_provider:
+            continue
+        any_had_embedding = True
+        score = _cosine_similarity(source_note.embedding, candidate.embedding)
+        if score > best_score:
+            best_score = score
+            best_note  = candidate
+
+    # If no compatible candidates have been embedded yet, fall back to most-recent
+    if not any_had_embedding:
+        return candidate_qs.first()
+
+    return best_note
+
+
+def _notes_are_related(student_note, teacher_note) -> bool:
+    """
+    True when the two notes are semantically related enough for conformity grading.
+
+    If neither has an embedding, falls back to subject-name comparison (or True
+    if neither has a subject set, to preserve old behaviour).
+
+    Cross-provider embeddings are never compared — falls through to subject matching.
+    """
+    if student_note.embedding and teacher_note.embedding:
+        s_prov = student_note.embedding_provider or ''
+        t_prov = teacher_note.embedding_provider or ''
+        if s_prov and t_prov and s_prov != t_prov:
+            # Incompatible dimensions — fall through to subject matching
+            pass
+        else:
+            return _cosine_similarity(student_note.embedding, teacher_note.embedding) >= EMBEDDING_MATCH_THRESHOLD
+
+    # Fallback: subject string match when embeddings aren't ready or are incompatible
+    if student_note.subject and teacher_note.subject:
+        return student_note.subject.strip().lower() == teacher_note.subject.strip().lower()
+
+    return True  # can't determine — proceed and let the AI judge
+
+
+# ── Conformity auto-trigger ───────────────────────────────────────────────────
 
 def _auto_trigger_conformity(note):
     """
-    Called after a note reaches READY status.
+    Called after a note reaches READY status (and embedding has been generated).
 
-    - STUDENT note  → find the teacher's READY reference note for the same
-                      subject + class and auto-create a conformity report.
-    - TEACHER note  → find every READY student note for that subject + class
-                      and auto-create conformity reports for all of them.
+    STUDENT note → find the best-matching READY teacher note in the same class
+                   via embedding cosine similarity and queue a conformity report.
 
-    Skips if: no subject, no class assignment, or a report already exists.
+    TEACHER note → find all READY student notes in the same class that are
+                   semantically related, and queue conformity reports for each.
+
+    Skips if: no class assignment, or a report already exists for the pair.
+    Subject field is used as a pre-filter hint when set, but matching is
+    primarily driven by embedding similarity.
     """
     from notes.models import NoteUpload, NoteStatus, NoteConformityReport
     from users.models import UserRole
 
-    if not note.subject or not note.owner_id:
+    if not note.owner_id:
         return
 
     try:
@@ -32,19 +116,27 @@ def _auto_trigger_conformity(note):
         return
 
     if owner.role == UserRole.STUDENT:
-        teacher_note = (
+        # Candidate pool: all READY teacher notes in the same class
+        teacher_qs = (
             NoteUpload.unscoped
             .filter(
                 school=note.school,
-                subject__iexact=note.subject,
                 status=NoteStatus.READY,
                 owner__role=UserRole.TEACHER,
                 owner__student_class_id=owner.student_class_id,
             )
             .order_by('-created_at')
-            .first()
         )
+
+        # Narrow by subject when the student provided one (efficiency hint only)
+        if note.subject:
+            narrowed = teacher_qs.filter(subject__iexact=note.subject)
+            if narrowed.exists():
+                teacher_qs = narrowed
+
+        teacher_note = _find_best_matching_note(note, teacher_qs)
         if not teacher_note:
+            logger.info('Auto-conformity: no matching teacher note found for student note %s', note.id)
             return
 
         if not NoteConformityReport.unscoped.filter(
@@ -57,19 +149,25 @@ def _auto_trigger_conformity(note):
             )
             run_conformity_analysis.apply_async(args=[str(report.id)], queue='celery_ai')
             logger.info(
-                'Auto-conformity queued: student note %s vs teacher note %s (report %s)',
+                'Auto-conformity queued: student note %s vs teacher note %s (report %s, similarity-based)',
                 note.id, teacher_note.id, report.id,
             )
 
     elif owner.role == UserRole.TEACHER:
-        student_notes = NoteUpload.unscoped.filter(
-            school=note.school,
-            subject__iexact=note.subject,
-            status=NoteStatus.READY,
-            owner__role=UserRole.STUDENT,
-            owner__student_class_id=owner.student_class_id,
+        # When a teacher note is ready, back-fill all matching student notes
+        student_qs = (
+            NoteUpload.unscoped
+            .filter(
+                school=note.school,
+                status=NoteStatus.READY,
+                owner__role=UserRole.STUDENT,
+                owner__student_class_id=owner.student_class_id,
+            )
         )
-        for student_note in student_notes:
+
+        for student_note in student_qs:
+            if not _notes_are_related(student_note, note):
+                continue
             if not NoteConformityReport.unscoped.filter(
                 student_note=student_note, teacher_note=note
             ).exists():
@@ -85,6 +183,8 @@ def _auto_trigger_conformity(note):
                 )
 
 
+# ── AI summary task ───────────────────────────────────────────────────────────
+
 @shared_task(
     bind=True,
     max_retries=3,
@@ -95,11 +195,9 @@ def run_ai_summary(self, note_id: str, provider_name: str | None = None):
     """
     Generate a three-part AI summary for a confirmed student note.
 
-    Uses the provider specified by `provider_name`, or falls back to
-    settings.AI_DEFAULT_TEXT_PROVIDER (default: 'anthropic').
-
-    The provider can be overridden per-task:
-        run_ai_summary.apply_async(args=[note_id], kwargs={'provider_name': 'openai'})
+    After the summary is saved (status → READY) this task also generates an
+    embedding for the note so that _auto_trigger_conformity can use cosine
+    similarity instead of subject-string matching.
     """
     from notes.models import NoteUpload, NoteStatus
 
@@ -148,9 +246,28 @@ def run_ai_summary(self, note_id: str, provider_name: str | None = None):
             note_id, result.provider, result.model, len(result.bullets), len(result.key_points),
         )
 
-        # Auto-trigger conformity analysis now that this note is READY.
+        # Generate embedding for semantic topic matching, then auto-trigger conformity.
+        note.refresh_from_db()
         try:
-            note.refresh_from_db()
+            from ai_app.integrations import generate_embedding_with_provider
+            emb, emb_provider = generate_embedding_with_provider(note.raw_ocr_text)
+            NoteUpload.unscoped.filter(pk=note_id).update(
+                embedding=emb,
+                embedding_provider=emb_provider,
+            )
+            note.embedding = emb
+            note.embedding_provider = emb_provider
+            logger.info(
+                'Embedding generated for note %s via %s (%d dims)',
+                note_id, emb_provider, len(emb),
+            )
+        except Exception as emb_exc:
+            logger.warning(
+                'Embedding generation failed for note %s — conformity will fall back to subject matching: %s',
+                note_id, emb_exc,
+            )
+
+        try:
             _auto_trigger_conformity(note)
         except Exception as exc:
             logger.warning('Auto-conformity trigger failed for note %s: %s', note_id, exc)
@@ -168,6 +285,8 @@ def run_ai_summary(self, note_id: str, provider_name: str | None = None):
             )
 
 
+# ── Conformity analysis task ──────────────────────────────────────────────────
+
 @shared_task(
     bind=True,
     max_retries=3,
@@ -176,16 +295,18 @@ def run_ai_summary(self, note_id: str, provider_name: str | None = None):
 )
 def run_conformity_analysis(self, report_id: str, provider_name: str | None = None):
     """
-    Generate an AI conformity analysis comparing student notes to teacher reference material.
+    Generate a partial-scoring conformity report comparing student notes against
+    only the corresponding portion of the teacher's master note (N_t').
 
-    Uses the provider specified by `provider_name`, or falls back to
-    settings.AI_DEFAULT_TEXT_PROVIDER (default: 'anthropic').
+    The AI identifies the student's stopping point, extracts the matching
+    subset of the teacher's document, and scores only against that subset —
+    so students are not penalised for content not yet taught in class.
     """
     from notes.models import NoteConformityReport, ConformityStatus
 
     try:
         report = NoteConformityReport.unscoped.select_related(
-            'student_note', 'teacher_note'
+            'student_note', 'teacher_note', 'teacher_lesson_doc'
         ).get(pk=report_id)
     except NoteConformityReport.DoesNotExist:
         logger.error('Conformity task: NoteConformityReport %s not found.', report_id)
@@ -195,7 +316,12 @@ def run_conformity_analysis(self, report_id: str, provider_name: str | None = No
     logger.info('Conformity analysis starting for report %s', report_id)
 
     student_text = report.student_note.raw_ocr_text.strip()
-    teacher_text = report.teacher_note.raw_ocr_text.strip()
+    if report.teacher_note:
+        teacher_text = report.teacher_note.raw_ocr_text.strip()
+    elif report.teacher_lesson_doc:
+        teacher_text = (report.teacher_lesson_doc.content_markdown or '').strip()
+    else:
+        teacher_text = ''
 
     if not student_text or not teacher_text:
         NoteConformityReport.unscoped.filter(pk=report_id).update(status=ConformityStatus.FAILED)
@@ -206,10 +332,16 @@ def run_conformity_analysis(self, report_id: str, provider_name: str | None = No
         from ai_app.integrations import compare_notes
 
         subject_context = ''
-        if report.student_note.subject:
-            subject_context = f'Subject: {report.student_note.subject}'
-            if report.student_note.topic:
-                subject_context += f' | Topic: {report.student_note.topic}'
+        subject_src = report.student_note.subject or (
+            report.teacher_lesson_doc.subject if report.teacher_lesson_doc else ''
+        )
+        topic_src = report.student_note.topic or (
+            report.teacher_lesson_doc.topic if report.teacher_lesson_doc else ''
+        )
+        if subject_src:
+            subject_context = f'Subject: {subject_src}'
+            if topic_src:
+                subject_context += f' | Topic: {topic_src}'
 
         result = compare_notes(
             student_text=student_text,
@@ -218,10 +350,13 @@ def run_conformity_analysis(self, report_id: str, provider_name: str | None = No
             provider_name=provider_name,
         )
 
+        from django.utils import timezone
         NoteConformityReport.unscoped.filter(pk=report_id).update(
             conformity_percentage=result.percentage,
             similarity_analysis=result.analysis,
+            matched_teacher_section=result.matched_section,
             status=ConformityStatus.DONE,
+            last_run_at=timezone.now(),
         )
         logger.info(
             'Conformity analysis complete for report %s: %.1f%% via %s/%s',

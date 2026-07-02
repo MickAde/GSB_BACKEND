@@ -300,18 +300,16 @@ GEMINI_MODEL      = config('GEMINI_MODEL',      default='gemini-3-flash-preview'
 PERPLEXITY_API_KEY = config('PERPLEXITY_API_KEY', default='')
 PERPLEXITY_MODEL   = config('PERPLEXITY_MODEL',   default='sonar')
 
-# OpenRouter — OpenAI-compatible gateway to 200+ models (great for dev)
-OPENROUTER_API_KEY = config('OPENROUTER_API_KEY', default='')
-OPENROUTER_MODEL   = config('OPENROUTER_MODEL',   default='google/gemini-2.0-flash-001')
-
-# Midjourney — Image generation (no public API yet; configure via proxy service)
-MIDJOURNEY_API_KEY      = config('MIDJOURNEY_API_KEY',      default='')
-MIDJOURNEY_API_BASE_URL = config('MIDJOURNEY_API_BASE_URL', default='')
-
 # Default provider per capability — override per task or per request
 AI_DEFAULT_TEXT_PROVIDER   = config('AI_DEFAULT_TEXT_PROVIDER',   default='anthropic')
 AI_DEFAULT_IMAGE_PROVIDER  = config('AI_DEFAULT_IMAGE_PROVIDER',  default='openai')
 AI_DEFAULT_SEARCH_PROVIDER = config('AI_DEFAULT_SEARCH_PROVIDER', default='perplexity')
+# Vision/OCR provider for image transcription (lesson doc uploads, student note images)
+# Options: anthropic | openai | gemini
+AI_VISION_PROVIDER         = config('AI_VISION_PROVIDER',         default='anthropic')
+# Audio transcription provider for voice note uploads
+# Options: openai (Whisper — best accuracy) | gemini
+AI_AUDIO_PROVIDER          = config('AI_AUDIO_PROVIDER',          default='openai')
 
 # ── Email ─────────────────────────────────────────────────────
 # Console backend for local dev; override EMAIL_BACKEND in .env.production

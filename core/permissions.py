@@ -30,8 +30,12 @@ class IsAnyAdmin(BasePermission):
 
 
 class IsVisitor(BasePermission):
+    message = 'Your free trial has expired. Please contact your school administrator.'
+
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'VISITOR')
+        if not (request.user and request.user.is_authenticated and request.user.role == 'VISITOR'):
+            return False
+        return request.user.is_visitor_trial_active
 
 
 class IsSchoolMember(BasePermission):

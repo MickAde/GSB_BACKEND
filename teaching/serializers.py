@@ -57,6 +57,8 @@ class LessonDocumentDetailSerializer(serializers.ModelSerializer):
 
 
 class CreateLessonDocumentSerializer(serializers.ModelSerializer):
+    generation_mode = serializers.ChoiceField(choices=['ai', 'manual', 'upload'], default='ai')
+
     class Meta:
         model  = LessonDocument
         fields = [

@@ -4,6 +4,7 @@ from .views import (
     AdminLessonDocDetailView,
     AdminLessonDocListView,
     AdminLessonDocReviewView,
+    DistributedLessonDocDetailView,
     DistributedLessonDocsView,
     LessonDocDetailView,
     LessonDocListCreateView,
@@ -12,6 +13,7 @@ from .views import (
     LessonDocVersionsView,
     # Legacy lesson plan endpoints (kept for backward compat)
     AIAssistView,
+    AIGenerateLessonPlanView,
     AdminLessonPlanListView,
     AdminLessonPlanReviewView,
     LessonPlanCommentsView,
@@ -23,8 +25,9 @@ from .views import (
 urlpatterns = [
     # ── New AI-first lesson documents ──────────────────────────
     path('lesson-docs/',                              LessonDocListCreateView.as_view(),        name='lesson-doc-list'),
-    path('lesson-docs/distributed/',                  DistributedLessonDocsView.as_view(),      name='lesson-doc-distributed'),
-    path('lesson-docs/<uuid:pk>/',                    LessonDocDetailView.as_view(),            name='lesson-doc-detail'),
+    path('lesson-docs/distributed/',             DistributedLessonDocsView.as_view(),       name='lesson-doc-distributed'),
+    path('lesson-docs/distributed/<uuid:pk>/',  DistributedLessonDocDetailView.as_view(),  name='lesson-doc-distributed-detail'),
+    path('lesson-docs/<uuid:pk>/',              LessonDocDetailView.as_view(),             name='lesson-doc-detail'),
     path('lesson-docs/<uuid:pk>/submit/',             LessonDocSubmitView.as_view(),            name='lesson-doc-submit'),
     path('lesson-docs/<uuid:pk>/regenerate-section/', LessonDocRegenerateSectionView.as_view(), name='lesson-doc-regen-section'),
     path('lesson-docs/<uuid:pk>/versions/',           LessonDocVersionsView.as_view(),          name='lesson-doc-versions'),
@@ -34,6 +37,7 @@ urlpatterns = [
     path('lesson-plans/<uuid:pk>/',              LessonPlanDetailView.as_view(),      name='lesson-plan-detail'),
     path('lesson-plans/<uuid:pk>/submit/',       SubmitLessonPlanView.as_view(),      name='lesson-plan-submit'),
     path('lesson-plans/<uuid:pk>/ai-assist/',    AIAssistView.as_view(),              name='lesson-plan-ai-assist'),
+    path('lesson-plans/<uuid:pk>/generate/',     AIGenerateLessonPlanView.as_view(),  name='lesson-plan-generate'),
     path('lesson-plans/<uuid:pk>/comments/',     LessonPlanCommentsView.as_view(),    name='lesson-plan-comments'),
 ]
 

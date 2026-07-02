@@ -16,6 +16,8 @@ from .views import (
     NoteConformityListCreateView,
     NoteConformityDetailView,
     NoteConformityStatusView,
+    ConformityTopicsView,
+    NoteConformityBulkView,
 )
 
 urlpatterns = [
@@ -33,6 +35,8 @@ urlpatterns = [
 
     # Conformity reports
     path('conformity/',                        NoteConformityListCreateView.as_view(), name='note-conformity-list'),
+    path('conformity/topics/',                 ConformityTopicsView.as_view(),         name='note-conformity-topics'),
+    path('conformity/bulk/',                   NoteConformityBulkView.as_view(),       name='note-conformity-bulk'),
     path('conformity/<uuid:pk>/',              NoteConformityDetailView.as_view(),     name='note-conformity-detail'),
     path('conformity/<uuid:pk>/status/',       NoteConformityStatusView.as_view(),     name='note-conformity-status'),
 

@@ -72,6 +72,7 @@ class QuizStatusSerializer(serializers.ModelSerializer):
 
 class CreateQuizSerializer(serializers.Serializer):
     note_id       = serializers.UUIDField()
+    lesson_doc_id = serializers.UUIDField(required=False, allow_null=True)
     difficulty    = serializers.ChoiceField(choices=['easy', 'moderate', 'difficult'], default='moderate')
     num_questions = serializers.IntegerField(min_value=1, max_value=50, default=10)
 
@@ -86,6 +87,19 @@ class CreateQuizSerializer(serializers.Serializer):
         if not note.raw_ocr_text.strip():
             raise serializers.ValidationError('Note has no text content.')
         self.context['note'] = note
+        return value
+
+    def validate_lesson_doc_id(self, value):
+        if value is None:
+            return value
+        from teaching.models import LessonDocument, LessonDocumentStatus
+        try:
+            doc = LessonDocument.objects.get(pk=value, status=LessonDocumentStatus.DISTRIBUTED)
+        except LessonDocument.DoesNotExist:
+            raise serializers.ValidationError('Lesson document not found or not distributed.')
+        if not doc.content_markdown.strip():
+            return None  # silently ignore if doc has no content
+        self.context['lesson_doc'] = doc
         return value
 
     def validate(self, data):

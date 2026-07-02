@@ -68,18 +68,64 @@ class LessonDocListCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        uploaded_files = request.FILES.getlist('uploaded_files')
+
+        doc_status = (
+            LessonDocumentStatus.DRAFT
+            if generation_mode == 'manual'
+            else LessonDocumentStatus.GENERATING
+        )
+
         doc = ser.save(
             teacher=request.user,
             school=request.user.school,
             class_level=class_level,
-            status=LessonDocumentStatus.GENERATING if generation_mode == 'ai' else LessonDocumentStatus.DRAFT,
+            status=doc_status,
         )
+
+        # Save each uploaded file as a child record
+        if uploaded_files:
+            from .models import LessonDocumentFile
+            LessonDocumentFile.objects.bulk_create([
+                LessonDocumentFile(document=doc, file=f, order=i)
+                for i, f in enumerate(uploaded_files)
+            ])
+
+        from django.conf import settings
 
         if generation_mode == 'ai':
             from .tasks import generate_lesson_document as gen_task
-            task = gen_task.delay(str(doc.id))
-            doc.ai_task_id = task.id
-            doc.save(update_fields=['ai_task_id'])
+
+            if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+                import threading
+                _doc_id = str(doc.id)
+                def _run_eager():
+                    try:
+                        gen_task.apply(args=[_doc_id])
+                    except Exception:
+                        pass
+                threading.Thread(target=_run_eager, daemon=True).start()
+            else:
+                task = gen_task.delay(str(doc.id))
+                doc.ai_task_id = task.id
+                doc.save(update_fields=['ai_task_id'])
+
+        elif generation_mode == 'upload':
+            from .tasks import process_lesson_doc_upload as upload_task
+
+            if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+                import threading
+                _doc_id = str(doc.id)
+                def _run_upload_eager():
+                    try:
+                        upload_task.apply(args=[_doc_id])
+                    except Exception:
+                        pass
+                threading.Thread(target=_run_upload_eager, daemon=True).start()
+            else:
+                task = upload_task.delay(str(doc.id))
+                doc.ai_task_id = task.id
+                doc.save(update_fields=['ai_task_id'])
 
         return Response(LessonDocumentDetailSerializer(doc).data, status=status.HTTP_201_CREATED)
 
@@ -289,7 +335,38 @@ class DistributedLessonDocsView(APIView):
         if subject:
             qs = qs.filter(subject=subject)
 
+        topic = request.query_params.get('topic')
+        if topic:
+            qs = qs.filter(topic=topic)
+
         return Response(LessonDocumentListSerializer(qs, many=True).data)
+
+
+# ── Student: single distributed lesson note (full content) ───────────────────
+
+class DistributedLessonDocDetailView(APIView):
+    """GET /api/v1/lesson-docs/distributed/<pk>/ — full content of a distributed lesson note."""
+
+    def get_permissions(self):
+        return [IsStudent()]
+
+    def get(self, request, pk):
+        student_class = getattr(request.user, 'student_class', None)
+        if not student_class:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            doc = LessonDocument.objects.select_related('teacher').get(
+                pk=pk,
+                school=request.user.school,
+                doc_type='note',
+                distributed_to_class=True,
+                teacher__student_class=student_class,
+            )
+        except LessonDocument.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(LessonDocumentDetailSerializer(doc).data)
 
 
 # ── Admin: lesson document review queue ──────────────────────────────────────
@@ -467,8 +544,8 @@ class LessonPlanDetailView(APIView):
         plan = self._get_own_plan(request, pk)
         if not plan:
             return Response({'detail': 'Lesson plan not found.'}, status=status.HTTP_404_NOT_FOUND)
-        if plan.status != LessonPlanStatus.DRAFT:
-            return Response({'detail': 'Only DRAFT plans can be deleted.'}, status=status.HTTP_409_CONFLICT)
+        if plan.status not in (LessonPlanStatus.DRAFT, LessonPlanStatus.REVISION_NEEDED):
+            return Response({'detail': 'Only DRAFT or REVISION_NEEDED plans can be deleted.'}, status=status.HTTP_409_CONFLICT)
         plan.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -513,6 +590,85 @@ class AIAssistView(APIView):
         except Exception as exc:
             logger.exception('AI assist failed: %s', exc)
             return Response({'detail': 'AI suggestions failed.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class AIGenerateLessonPlanView(APIView):
+    """
+    POST /api/v1/lesson-plans/<id>/generate/
+
+    Fully populate the LessonPlan fields using AI.
+    Accepts optional overrides for subject, topic, subtopic, term, week, and
+    additional_context in the request body; falls back to the plan's saved values.
+    Only DRAFT and REVISION_NEEDED plans can be regenerated.
+    """
+
+    def get_permissions(self):
+        return [IsTeacher()]
+
+    def post(self, request, pk):
+        try:
+            plan = LessonPlan.objects.select_related('school').get(pk=pk, teacher=request.user)
+        except LessonPlan.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if plan.status not in (LessonPlanStatus.DRAFT, LessonPlanStatus.REVISION_NEEDED):
+            return Response(
+                {'detail': 'Only DRAFT or REVISION_NEEDED plans can be regenerated.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        subject        = request.data.get('subject', '')     or plan.subject
+        topic          = request.data.get('topic', '')       or plan.topic
+        subtopic       = request.data.get('subtopic', '')    or plan.subtopic
+        class_level    = getattr(request.user.student_class, 'name', '') or request.data.get('class_level', '')
+        curriculum_type = getattr(plan.school, 'curriculum_type', 'nerdc') or 'nerdc'
+        additional_context = request.data.get('additional_context', '')
+
+        try:
+            term = int(request.data.get('term', 1))
+            week = int(request.data.get('week', 1))
+        except (TypeError, ValueError):
+            return Response({'detail': 'term and week must be integers.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not subject or not topic:
+            return Response(
+                {'detail': 'Subject and topic are required. Set them on the plan or pass them in the request body.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not class_level:
+            return Response(
+                {'detail': 'You must be assigned to a class to generate lesson content.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            from ai_app.integrations import generate_lesson_plan_content
+            fields = generate_lesson_plan_content(
+                subject=subject,
+                topic=topic,
+                subtopic=subtopic,
+                class_level=class_level,
+                term=term,
+                week=week,
+                curriculum_type=curriculum_type,
+                additional_context=additional_context,
+            )
+        except Exception as exc:
+            logger.exception('AI lesson plan generation failed for plan %s: %s', pk, exc)
+            return Response(
+                {'detail': 'AI generation failed. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        update_fields = ['updated_at']
+        for field_name, value in fields.items():
+            if hasattr(plan, field_name) and value:
+                setattr(plan, field_name, value)
+                update_fields.append(field_name)
+
+        plan.save(update_fields=list(set(update_fields)))
+        plan.refresh_from_db()
+        return Response(LessonPlanDetailSerializer(plan).data)
 
 
 class LessonPlanCommentsView(APIView):
